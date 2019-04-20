@@ -1,4 +1,5 @@
-### Peripheral access control for Real-Time Systems using TrustZone (Normal World: Raspbian Secure World: OPTEE).
+### Peripheral access control for Real-Time Systems using TrustZone 
+#### (Normal World: Raspbian Secure World: OPTEE).
 _Check the `prepare-env.sh` for the sepecific versions_      
 
 <br>
