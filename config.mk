@@ -1,6 +1,6 @@
 TEE_SDK_DIR=$(shell pwd)
-TOOLCHAIN_32_PATH := $(TEE_SDK_DIR)/toolchain/aarch32/bin/arm-linux-gnueabihf-
-TOOLCHAIN_64_PATH := $(TEE_SDK_DIR)/toolchain/aarch64/bin/aarch64-linux-gnu-
+TOOLCHAIN_32_PATH := $(TEE_SDK_DIR)/toolchains/aarch32/bin/arm-linux-gnueabihf-
+TOOLCHAIN_64_PATH := $(TEE_SDK_DIR)/toolchains/aarch64/bin/aarch64-linux-gnu-
 
 
 export CROSS_COMPILE := $(TOOLCHAIN_32_PATH)
