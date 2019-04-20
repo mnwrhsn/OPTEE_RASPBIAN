@@ -1,8 +1,12 @@
-### Peripheral access control for Real-Time Systems using TrustZone 
+
 #### (Normal World: Raspbian Stretch, Secure World: OPTEE)
 _Check the `prepare-env.sh` for the sepecific versions_      
 
+### NOTE: I2C/SPI not working in this setup
+
+
 <br>
+
 
 **Perform the steps in the host machine:**
 _(tested on Ubuntu 16.04)_
