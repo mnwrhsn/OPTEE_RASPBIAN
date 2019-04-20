@@ -1,5 +1,7 @@
-#### Peripheral access control using TrustZone (Normal World: Raspbian Secure World: OPTEE).
+### Peripheral access control using TrustZone (Normal World: Raspbian Secure World: OPTEE).
 _Check the `prepare-env.sh` for the sepecific versions_      
+
+
 
 **Perform the steps in the host machine:**
 _(tested on Ubuntu 16.04)_
