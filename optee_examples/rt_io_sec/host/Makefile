@@ -12,7 +12,7 @@ CFLAGS += -Wall -I../ta/include -I$(TEEC_EXPORT)/include -I./include
 
 #Add/link other required libraries here
 LDADD += -lteec -L$(TEEC_EXPORT)/lib
-LDADD += -fPIC -shared  # for shared library
+# LDADD += -fPIC -shared  # for shared library
 
 BINARY = rt_io_sec_client
 
