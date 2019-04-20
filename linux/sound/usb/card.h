@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __USBAUDIO_CARD_H
 #define __USBAUDIO_CARD_H
 
@@ -31,6 +32,7 @@ struct audioformat {
 	struct snd_pcm_chmap_elem *chmap; /* (optional) channel map */
 	bool dsd_dop;			/* add DOP headers in case of DSD samples */
 	bool dsd_bitrev;		/* reverse the bits of each DSD sample */
+	bool dsd_raw;			/* altsetting is raw DSD */
 };
 
 struct snd_usb_substream;

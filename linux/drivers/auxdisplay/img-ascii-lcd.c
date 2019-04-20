@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2016 Imagination Technologies
- * Author: Paul Burton <paul.burton@imgtec.com>
+ * Author: Paul Burton <paul.burton@mips.com>
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -220,6 +220,7 @@ static const struct of_device_id img_ascii_lcd_matches[] = {
 	{ .compatible = "mti,sead3-lcd", .data = &sead3_config },
 	{ /* sentinel */ }
 };
+MODULE_DEVICE_TABLE(of, img_ascii_lcd_matches);
 
 /**
  * img_ascii_lcd_scroll() - scroll the display by a character
@@ -442,3 +443,7 @@ static struct platform_driver img_ascii_lcd_driver = {
 	.remove	= img_ascii_lcd_remove,
 };
 module_platform_driver(img_ascii_lcd_driver);
+
+MODULE_DESCRIPTION("Imagination Technologies ASCII LCD Display");
+MODULE_AUTHOR("Paul Burton <paul.burton@mips.com>");
+MODULE_LICENSE("GPL");

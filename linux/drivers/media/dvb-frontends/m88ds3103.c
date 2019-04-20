@@ -16,7 +16,7 @@
 
 #include "m88ds3103_priv.h"
 
-static struct dvb_frontend_ops m88ds3103_ops;
+static const struct dvb_frontend_ops m88ds3103_ops;
 
 /* write single register with mask */
 static int m88ds3103_update_bits(struct m88ds3103_dev *dev,
@@ -1262,11 +1262,12 @@ static int m88ds3103_select(struct i2c_mux_core *muxc, u32 chan)
  * New users must use I2C client binding directly!
  */
 struct dvb_frontend *m88ds3103_attach(const struct m88ds3103_config *cfg,
-		struct i2c_adapter *i2c, struct i2c_adapter **tuner_i2c_adapter)
+				      struct i2c_adapter *i2c,
+				      struct i2c_adapter **tuner_i2c_adapter)
 {
 	struct i2c_client *client;
 	struct i2c_board_info board_info;
-	struct m88ds3103_platform_data pdata;
+	struct m88ds3103_platform_data pdata = {};
 
 	pdata.clk = cfg->clock;
 	pdata.i2c_wr_max = cfg->i2c_wr_max;
@@ -1295,7 +1296,7 @@ struct dvb_frontend *m88ds3103_attach(const struct m88ds3103_config *cfg,
 }
 EXPORT_SYMBOL(m88ds3103_attach);
 
-static struct dvb_frontend_ops m88ds3103_ops = {
+static const struct dvb_frontend_ops m88ds3103_ops = {
 	.delsys = {SYS_DVBS, SYS_DVBS2},
 	.info = {
 		.name = "Montage Technology M88DS3103",
@@ -1409,6 +1410,8 @@ static int m88ds3103_probe(struct i2c_client *client,
 	case M88DS3103_CHIP_ID:
 		break;
 	default:
+		ret = -ENODEV;
+		dev_err(&client->dev, "Unknown device. Chip_id=%02x\n", dev->chip_id);
 		goto err_kfree;
 	}
 

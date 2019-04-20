@@ -210,39 +210,48 @@ static int arc_emac_rx(struct net_device *ndev, int budget)
 			continue;
 		}
 
-		pktlen = info & LEN_MASK;
-		stats->rx_packets++;
-		stats->rx_bytes += pktlen;
-		skb = rx_buff->skb;
-		skb_put(skb, pktlen);
-		skb->dev = ndev;
-		skb->protocol = eth_type_trans(skb, ndev);
-
-		dma_unmap_single(&ndev->dev, dma_unmap_addr(rx_buff, addr),
-				 dma_unmap_len(rx_buff, len), DMA_FROM_DEVICE);
-
-		/* Prepare the BD for next cycle */
-		rx_buff->skb = netdev_alloc_skb_ip_align(ndev,
-							 EMAC_BUFFER_SIZE);
-		if (unlikely(!rx_buff->skb)) {
+		/* Prepare the BD for next cycle. netif_receive_skb()
+		 * only if new skb was allocated and mapped to avoid holes
+		 * in the RX fifo.
+		 */
+		skb = netdev_alloc_skb_ip_align(ndev, EMAC_BUFFER_SIZE);
+		if (unlikely(!skb)) {
+			if (net_ratelimit())
+				netdev_err(ndev, "cannot allocate skb\n");
+			/* Return ownership to EMAC */
+			rxbd->info = cpu_to_le32(FOR_EMAC | EMAC_BUFFER_SIZE);
 			stats->rx_errors++;
-			/* Because receive_skb is below, increment rx_dropped */
 			stats->rx_dropped++;
 			continue;
 		}
 
-		/* receive_skb only if new skb was allocated to avoid holes */
-		netif_receive_skb(skb);
-
-		addr = dma_map_single(&ndev->dev, (void *)rx_buff->skb->data,
+		addr = dma_map_single(&ndev->dev, (void *)skb->data,
 				      EMAC_BUFFER_SIZE, DMA_FROM_DEVICE);
 		if (dma_mapping_error(&ndev->dev, addr)) {
 			if (net_ratelimit())
-				netdev_err(ndev, "cannot dma map\n");
-			dev_kfree_skb(rx_buff->skb);
+				netdev_err(ndev, "cannot map dma buffer\n");
+			dev_kfree_skb(skb);
+			/* Return ownership to EMAC */
+			rxbd->info = cpu_to_le32(FOR_EMAC | EMAC_BUFFER_SIZE);
 			stats->rx_errors++;
+			stats->rx_dropped++;
 			continue;
 		}
+
+		/* unmap previosly mapped skb */
+		dma_unmap_single(&ndev->dev, dma_unmap_addr(rx_buff, addr),
+				 dma_unmap_len(rx_buff, len), DMA_FROM_DEVICE);
+
+		pktlen = info & LEN_MASK;
+		stats->rx_packets++;
+		stats->rx_bytes += pktlen;
+		skb_put(rx_buff->skb, pktlen);
+		rx_buff->skb->dev = ndev;
+		rx_buff->skb->protocol = eth_type_trans(rx_buff->skb, ndev);
+
+		netif_receive_skb(rx_buff->skb);
+
+		rx_buff->skb = skb;
 		dma_unmap_addr_set(rx_buff, addr, addr);
 		dma_unmap_len_set(rx_buff, len, EMAC_BUFFER_SIZE);
 
@@ -275,7 +284,7 @@ static int arc_emac_poll(struct napi_struct *napi, int budget)
 
 	work_done = arc_emac_rx(ndev, budget);
 	if (work_done < budget) {
-		napi_complete(napi);
+		napi_complete_done(napi, work_done);
 		arc_reg_or(priv, R_ENABLE, RXINT_MASK | TXINT_MASK);
 	}
 
@@ -434,7 +443,7 @@ static int arc_emac_open(struct net_device *ndev)
 	/* Enable EMAC */
 	arc_reg_or(priv, R_CTRL, EN_MASK);
 
-	phy_start_aneg(ndev->phydev);
+	phy_start(ndev->phydev);
 
 	netif_start_queue(ndev);
 
@@ -556,6 +565,8 @@ static int arc_emac_stop(struct net_device *ndev)
 	napi_disable(&priv->napi);
 	netif_stop_queue(ndev);
 
+	phy_stop(ndev->phydev);
+
 	/* Disable interrupts */
 	arc_reg_clr(priv, R_ENABLE, RXINT_MASK | TXINT_MASK | ERR_MASK);
 
@@ -636,7 +647,7 @@ static int arc_emac_tx(struct sk_buff *skb, struct net_device *ndev)
 	if (unlikely(dma_mapping_error(&ndev->dev, addr))) {
 		stats->tx_dropped++;
 		stats->tx_errors++;
-		dev_kfree_skb(skb);
+		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
 	dma_unmap_addr_set(&priv->tx_buff[*txbd_curr], addr, addr);
@@ -718,6 +729,18 @@ static int arc_emac_set_address(struct net_device *ndev, void *p)
 	return 0;
 }
 
+static int arc_emac_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+{
+	if (!netif_running(dev))
+		return -EINVAL;
+
+	if (!dev->phydev)
+		return -ENODEV;
+
+	return phy_mii_ioctl(dev->phydev, rq, cmd);
+}
+
+
 static const struct net_device_ops arc_emac_netdev_ops = {
 	.ndo_open		= arc_emac_open,
 	.ndo_stop		= arc_emac_stop,
@@ -725,6 +748,7 @@ static const struct net_device_ops arc_emac_netdev_ops = {
 	.ndo_set_mac_address	= arc_emac_set_address,
 	.ndo_get_stats		= arc_emac_stats,
 	.ndo_set_rx_mode	= arc_emac_set_rx_mode,
+	.ndo_do_ioctl		= arc_emac_ioctl,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= arc_emac_poll_controller,
 #endif

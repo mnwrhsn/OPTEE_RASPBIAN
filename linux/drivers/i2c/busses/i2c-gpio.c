@@ -98,8 +98,8 @@ static int of_i2c_gpio_get_pins(struct device_node *np,
 		return -EPROBE_DEFER;
 
 	if (!gpio_is_valid(*sda_pin) || !gpio_is_valid(*scl_pin)) {
-		pr_err("%s: invalid GPIO pins, sda=%d/scl=%d\n",
-		       np->full_name, *sda_pin, *scl_pin);
+		pr_err("%pOF: invalid GPIO pins, sda=%d/scl=%d\n",
+		       np, *sda_pin, *scl_pin);
 		return -ENODEV;
 	}
 
@@ -220,7 +220,9 @@ static int i2c_gpio_probe(struct platform_device *pdev)
 	adap->dev.parent = &pdev->dev;
 	adap->dev.of_node = pdev->dev.of_node;
 
-	adap->nr = pdev->id;
+	if (pdev->id != PLATFORM_DEVID_NONE || !pdev->dev.of_node ||
+	    of_property_read_u32(pdev->dev.of_node, "reg", &adap->nr))
+		adap->nr = pdev->id;
 	ret = i2c_bit_add_numbered_bus(adap);
 	if (ret)
 		return ret;

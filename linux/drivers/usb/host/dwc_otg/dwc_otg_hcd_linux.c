@@ -232,7 +232,7 @@ static int _hub_info(dwc_otg_hcd_t * hcd, void *urb_handle, uint32_t * hub_addr,
 		else
 			*hub_addr = urb->dev->tt->hub->devnum;
 	}
-	*port_addr = urb->dev->tt->multi ? urb->dev->ttport : 1;
+	*port_addr = urb->dev->ttport;
    } else {
         *hub_addr = 0;
 	*port_addr = urb->dev->ttport;
@@ -519,6 +519,11 @@ static void hcd_init_fiq(void *cookie)
 		DWC_ERROR("Can't get FIQ irq");
 		return;
 	}
+	/*
+	 * We could take an interrupt immediately after enabling the FIQ.
+	 * Ensure coherency of hcd->fiq_state.
+	 */
+	smp_mb();
 	enable_fiq(irq);
 	local_fiq_enable();
 #endif
@@ -598,7 +603,11 @@ int hcd_init(dwc_bus_dev_t *_dev)
 
 	if (fiq_enable) {
 		if (num_online_cpus() > 1) {
-			/* bcm2709: can run the FIQ on a separate core to IRQs */
+			/*
+			 * bcm2709: can run the FIQ on a separate core to IRQs.
+			 * Ensure driver state is visible to other cores before setting up the FIQ.
+			 */
+			smp_mb();
 			smp_call_function_single(1, hcd_init_fiq, otg_dev, 1);
 		} else {
 			smp_call_function_single(0, hcd_init_fiq, otg_dev, 1);
@@ -1003,25 +1012,11 @@ static void endpoint_disable(struct usb_hcd *hcd, struct usb_host_endpoint *ep)
 static void endpoint_reset(struct usb_hcd *hcd, struct usb_host_endpoint *ep)
 {
 	dwc_irqflags_t flags;
-	struct usb_device *udev = NULL;
-	int epnum = usb_endpoint_num(&ep->desc);
-	int is_out = usb_endpoint_dir_out(&ep->desc);
-	int is_control = usb_endpoint_xfer_control(&ep->desc);
 	dwc_otg_hcd_t *dwc_otg_hcd = hcd_to_dwc_otg_hcd(hcd);
-        struct device *dev = DWC_OTG_OS_GETDEV(dwc_otg_hcd->otg_dev->os_dep);
-
-	if (dev)
-		udev = to_usb_device(dev);
-	else
-		return;
 
 	DWC_DEBUGPL(DBG_HCD, "DWC OTG HCD EP RESET: Endpoint Num=0x%02d\n", epnum);
 
 	DWC_SPINLOCK_IRQSAVE(dwc_otg_hcd->lock, &flags);
-	usb_settoggle(udev, epnum, is_out, 0);
-	if (is_control)
-		usb_settoggle(udev, epnum, !is_out, 0);
-
 	if (ep->hcpriv) {
 		dwc_otg_hcd_endpoint_reset(dwc_otg_hcd, ep->hcpriv);
 	}

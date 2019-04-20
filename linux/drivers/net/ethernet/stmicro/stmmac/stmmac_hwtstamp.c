@@ -12,10 +12,6 @@
   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
   more details.
 
-  You should have received a copy of the GNU General Public License along with
-  this program; if not, write to the Free Software Foundation, Inc.,
-  51 Franklin St - Fifth Floor, Boston, MA 02110-1301 USA.
-
   The full GNU General Public License is included in this distribution in
   the file called "COPYING".
 
@@ -38,6 +34,7 @@ static u32 stmmac_config_sub_second_increment(void __iomem *ioaddr,
 {
 	u32 value = readl(ioaddr + PTP_TCR);
 	unsigned long data;
+	u32 reg_value;
 
 	/* For GMAC3.x, 4.x versions, convert the ptp_clock to nano second
 	 *	formula = (1/ptp_clock) * 1000000000
@@ -54,10 +51,11 @@ static u32 stmmac_config_sub_second_increment(void __iomem *ioaddr,
 
 	data &= PTP_SSIR_SSINC_MASK;
 
+	reg_value = data;
 	if (gmac4)
-		data = data << GMAC4_PTP_SSIR_SSINC_SHIFT;
+		reg_value <<= GMAC4_PTP_SSIR_SSINC_SHIFT;
 
-	writel(data, ioaddr + PTP_SSIR);
+	writel(reg_value, ioaddr + PTP_SSIR);
 
 	return data;
 }

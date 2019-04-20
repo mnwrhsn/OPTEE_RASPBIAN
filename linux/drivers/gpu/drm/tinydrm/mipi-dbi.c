@@ -64,7 +64,7 @@
 	else if (len <= 32) \
 		DRM_DEBUG_DRIVER("cmd=%02x, par=%*ph\n", cmd, (int)len, data);\
 	else \
-		DRM_DEBUG_DRIVER("cmd=%02x, len=%zu\n", cmd, (int)len); \
+		DRM_DEBUG_DRIVER("cmd=%02x, len=%zu\n", cmd, len); \
 })
 
 static const u8 mipi_dbi_dcs_read_commands[] = {
@@ -158,6 +158,7 @@ static int mipi_dbi_buf_copy(void *dst, struct drm_framebuffer *fb,
 {
 	struct drm_gem_cma_object *cma_obj = drm_fb_cma_get_gem_obj(fb, 0);
 	struct dma_buf_attachment *import_attach = cma_obj->base.import_attach;
+	struct drm_format_name_buf format_name;
 	void *src = cma_obj->vaddr;
 	int ret = 0;
 
@@ -168,7 +169,7 @@ static int mipi_dbi_buf_copy(void *dst, struct drm_framebuffer *fb,
 			return ret;
 	}
 
-	switch (fb->pixel_format) {
+	switch (fb->format->format) {
 	case DRM_FORMAT_RGB565:
 		if (swap)
 			tinydrm_swab16(dst, src, fb, clip);
@@ -179,8 +180,9 @@ static int mipi_dbi_buf_copy(void *dst, struct drm_framebuffer *fb,
 		tinydrm_xrgb8888_to_rgb565(dst, src, fb, clip, swap);
 		break;
 	default:
-		dev_err_once(fb->dev->dev, "Format is not supported: %04x\n",
-			     fb->pixel_format);
+		dev_err_once(fb->dev->dev, "Format is not supported: %s\n",
+			     drm_get_format_name(fb->format->format,
+						 &format_name));
 		return -EINVAL;
 	}
 
@@ -221,7 +223,7 @@ static int mipi_dbi_fb_dirty(struct drm_framebuffer *fb,
 		  clip.x1, clip.x2, clip.y1, clip.y2);
 
 	if (!mipi->dc || !full || swap ||
-	    fb->pixel_format == DRM_FORMAT_XRGB8888) {
+	    fb->format->format == DRM_FORMAT_XRGB8888) {
 		tr = mipi->tx_buf;
 		ret = mipi_dbi_buf_copy(mipi->tx_buf, fb, &clip, swap);
 		if (ret)
@@ -588,7 +590,7 @@ static int mipi_dbi_spi1e_transfer(struct mipi_dbi *mipi, int dc,
 		ret = spi_sync(spi, &m);
 		if (ret)
 			return ret;
-	};
+	}
 
 	return 0;
 }
@@ -652,7 +654,7 @@ static int mipi_dbi_spi1_transfer(struct mipi_dbi *mipi, int dc,
 		ret = spi_sync(spi, &m);
 		if (ret)
 			return ret;
-	};
+	}
 
 	return 0;
 }
@@ -774,15 +776,12 @@ static int mipi_dbi_typec3_command(struct mipi_dbi *mipi, u8 cmd,
 /**
  * mipi_dbi_spi_init - Initialize MIPI DBI SPI interfaced controller
  * @spi: SPI device
- * @dc: D/C gpio (optional)
  * @mipi: &mipi_dbi structure to initialize
- * @pipe_funcs: Display pipe functions
- * @driver: DRM driver
- * @mode: Display mode
- * @rotation: Initial rotation in degrees Counter Clock Wise
+ * @dc: D/C gpio (optional)
  *
  * This function sets &mipi_dbi->command, enables &mipi->read_commands for the
- * usual read commands and initializes @mipi using mipi_dbi_init().
+ * usual read commands. It should be followed by a call to mipi_dbi_init() or
+ * a driver-specific init.
  *
  * If @dc is set, a Type C Option 3 interface is assumed, if not
  * Type C Option 1.
@@ -797,11 +796,7 @@ static int mipi_dbi_typec3_command(struct mipi_dbi *mipi, u8 cmd,
  * Zero on success, negative error code on failure.
  */
 int mipi_dbi_spi_init(struct spi_device *spi, struct mipi_dbi *mipi,
-		      struct gpio_desc *dc,
-		      const struct drm_simple_display_pipe_funcs *pipe_funcs,
-		      struct drm_driver *driver,
-		      const struct drm_display_mode *mode,
-		      unsigned int rotation)
+		      struct gpio_desc *dc)
 {
 	size_t tx_size = tinydrm_spi_max_transfer_size(spi, 0);
 	struct device *dev = &spi->dev;
@@ -847,7 +842,7 @@ int mipi_dbi_spi_init(struct spi_device *spi, struct mipi_dbi *mipi,
 			return -ENOMEM;
 	}
 
-	return mipi_dbi_init(dev, mipi, pipe_funcs, driver, mode, rotation);
+	return 0;
 }
 EXPORT_SYMBOL(mipi_dbi_spi_init);
 
@@ -912,7 +907,7 @@ static int mipi_dbi_debugfs_command_show(struct seq_file *m, void *unused)
 {
 	struct mipi_dbi *mipi = m->private;
 	u8 cmd, val[4];
-	size_t len, i;
+	size_t len;
 	int ret;
 
 	for (cmd = 0; cmd < 255; cmd++) {
@@ -941,10 +936,7 @@ static int mipi_dbi_debugfs_command_show(struct seq_file *m, void *unused)
 			seq_puts(m, "XX\n");
 			continue;
 		}
-
-		for (i = 0; i < len; i++)
-			seq_printf(m, "%02x", val[i]);
-		seq_puts(m, "\n");
+		seq_printf(m, "%*phN\n", (int)len, val);
 	}
 
 	return 0;

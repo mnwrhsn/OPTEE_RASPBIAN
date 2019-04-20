@@ -14,16 +14,15 @@
  * Pi's firmware display stack.
  */
 
-#include <drm/drm_atomic.h>
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_plane_helper.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_fourcc.h>
-#include <linux/clk.h>
-#include <linux/debugfs.h>
-#include <drm/drm_fb_cma_helper.h>
-#include <linux/component.h>
-#include <linux/of_device.h>
+#include "drm/drm_atomic_helper.h"
+#include "drm/drm_plane_helper.h"
+#include "drm/drm_crtc_helper.h"
+#include "drm/drm_fourcc.h"
+#include "linux/clk.h"
+#include "linux/debugfs.h"
+#include "drm/drm_fb_cma_helper.h"
+#include "linux/component.h"
+#include "linux/of_device.h"
 #include "vc4_drv.h"
 #include "vc4_regs.h"
 #include <soc/bcm2835/raspberrypi-firmware.h>
@@ -38,12 +37,11 @@ struct vc4_crtc {
 	struct drm_crtc base;
 	struct drm_encoder *encoder;
 	struct drm_connector *connector;
-	struct drm_plane *primary;
-	struct drm_plane *cursor;
 	void __iomem *regs;
 
 	struct drm_pending_vblank_event *event;
 	u32 overscan[4];
+	bool vblank_enabled;
 };
 
 static inline struct vc4_crtc *to_vc4_crtc(struct drm_crtc *crtc)
@@ -138,7 +136,7 @@ static void vc4_primary_plane_atomic_update(struct drm_plane *plane,
 	fbinfo->base = bo->paddr + fb->offsets[0];
 	fbinfo->pitch = fb->pitches[0];
 
-	if (fb->modifier[0] == DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED)
+	if (fb->modifier == DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED)
 		fbinfo->bpp |= BIT(31);
 
 	/* A bug in the firmware makes it so that if the fb->base is
@@ -204,12 +202,7 @@ static void vc4_cursor_plane_atomic_update(struct drm_plane *plane,
 		state->crtc_y,
 		0
 	};
-	u32 packet_info[] = { state->crtc_w, state->crtc_h,
-			      0, /* unused */
-			      bo->paddr + fb->offsets[0],
-			      0, 0, /* hotx, hoty */};
 	WARN_ON_ONCE(fb->pitches[0] != state->crtc_w * 4);
-	WARN_ON_ONCE(fb->bits_per_pixel != 32);
 
 	DRM_DEBUG_ATOMIC("[PLANE:%d:%s] update %dx%d cursor at %d,%d (0x%08x/%d)",
 			 plane->base.id, plane->name,
@@ -233,12 +226,26 @@ static void vc4_cursor_plane_atomic_update(struct drm_plane *plane,
 	if (ret || packet_state[0] != 0)
 		DRM_ERROR("Failed to set cursor state: 0x%08x\n", packet_state[0]);
 
-	ret = rpi_firmware_property(vc4->firmware,
-				    RPI_FIRMWARE_SET_CURSOR_INFO,
-				    &packet_info,
-				    sizeof(packet_info));
-	if (ret || packet_info[0] != 0)
-		DRM_ERROR("Failed to set cursor info: 0x%08x\n", packet_info[0]);
+	/* Note: When the cursor contents change, the modesetting
+	 * driver calls drm_mode_cursor_univeral() with
+	 * DRM_MODE_CURSOR_BO, which means a new fb will be allocated.
+	 */
+	if (!old_state ||
+	    state->crtc_w != old_state->crtc_w ||
+	    state->crtc_h != old_state->crtc_h ||
+	    fb != old_state->fb) {
+		u32 packet_info[] = { state->crtc_w, state->crtc_h,
+				      0, /* unused */
+				      bo->paddr + fb->offsets[0],
+				      0, 0, /* hotx, hoty */};
+
+		ret = rpi_firmware_property(vc4->firmware,
+					    RPI_FIRMWARE_SET_CURSOR_INFO,
+					    &packet_info,
+					    sizeof(packet_info));
+		if (ret || packet_info[0] != 0)
+			DRM_ERROR("Failed to set cursor info: 0x%08x\n", packet_info[0]);
+	}
 }
 
 static void vc4_cursor_plane_atomic_disable(struct drm_plane *plane,
@@ -316,7 +323,7 @@ static struct drm_plane *vc4_fkms_plane_init(struct drm_device *dev,
 	plane = &vc4_plane->base;
 	ret = drm_universal_plane_init(dev, plane, 0xff,
 				       &vc4_plane_funcs,
-				       primary ? &xrgb8888 : &argb8888, 1,
+				       primary ? &xrgb8888 : &argb8888, 1, NULL,
 				       type, primary ? "primary" : "cursor");
 
 	if (type == DRM_PLANE_TYPE_PRIMARY) {
@@ -345,31 +352,26 @@ static void vc4_crtc_mode_set_nofb(struct drm_crtc *crtc)
 	/* Everyting is handled in the planes. */
 }
 
-static void vc4_crtc_disable(struct drm_crtc *crtc)
+static void vc4_crtc_disable(struct drm_crtc *crtc, struct drm_crtc_state *old_state)
 {
-	struct vc4_crtc *vc4_crtc = to_vc4_crtc(crtc);
-
 	/* Always turn the planes off on CRTC disable. In DRM, planes
 	 * are enabled/disabled through the update/disable hooks
 	 * above, and the CRTC enable/disable independently controls
 	 * whether anything scans out at all, but the firmware doesn't
 	 * give us a CRTC-level control for that.
 	 */
-	vc4_cursor_plane_atomic_disable(vc4_crtc->cursor,
-					vc4_crtc->cursor->state);
-	vc4_plane_set_primary_blank(vc4_crtc->primary, true);
+	vc4_cursor_plane_atomic_disable(crtc->cursor, crtc->cursor->state);
+	vc4_plane_set_primary_blank(crtc->primary, true);
 }
 
-static void vc4_crtc_enable(struct drm_crtc *crtc)
+static void vc4_crtc_enable(struct drm_crtc *crtc, struct drm_crtc_state *old_state)
 {
-	struct vc4_crtc *vc4_crtc = to_vc4_crtc(crtc);
-
 	/* Unblank the planes (if they're supposed to be displayed). */
-	if (vc4_crtc->primary->state->fb)
-		vc4_plane_set_primary_blank(vc4_crtc->primary, false);
-	if (vc4_crtc->cursor->state->fb) {
-		vc4_cursor_plane_atomic_update(vc4_crtc->cursor,
-					       vc4_crtc->cursor->state);
+	if (crtc->primary->state->fb)
+		vc4_plane_set_primary_blank(crtc->primary, false);
+	if (crtc->cursor->state->fb) {
+		vc4_cursor_plane_atomic_update(crtc->cursor,
+					       crtc->cursor->state);
 	}
 }
 
@@ -422,7 +424,8 @@ static irqreturn_t vc4_crtc_irq_handler(int irq, void *data)
 
 	if (stat & SMICS_INTERRUPTS) {
 		writel(0, vc4_crtc->regs + SMICS);
-		drm_crtc_handle_vblank(&vc4_crtc->base);
+		if (vc4_crtc->vblank_enabled)
+			drm_crtc_handle_vblank(&vc4_crtc->base);
 		vc4_crtc_handle_page_flip(vc4_crtc);
 		ret = IRQ_HANDLED;
 	}
@@ -433,14 +436,27 @@ static irqreturn_t vc4_crtc_irq_handler(int irq, void *data)
 static int vc4_page_flip(struct drm_crtc *crtc,
 			 struct drm_framebuffer *fb,
 			 struct drm_pending_vblank_event *event,
-			 uint32_t flags)
+			 uint32_t flags, struct drm_modeset_acquire_ctx *ctx)
 {
 	if (flags & DRM_MODE_PAGE_FLIP_ASYNC) {
 		DRM_ERROR("Async flips aren't allowed\n");
 		return -EINVAL;
 	}
 
-	return drm_atomic_helper_page_flip(crtc, fb, event, flags);
+	return drm_atomic_helper_page_flip(crtc, fb, event, flags, ctx);
+}
+
+static int vc4_fkms_enable_vblank(struct drm_crtc *crtc)
+{
+	struct vc4_crtc *vc4_crtc = to_vc4_crtc(crtc);
+
+	vc4_crtc->vblank_enabled = true;
+
+	return 0;
+}
+
+static void vc4_fkms_disable_vblank(struct drm_crtc *crtc)
+{
 }
 
 static const struct drm_crtc_funcs vc4_crtc_funcs = {
@@ -453,12 +469,14 @@ static const struct drm_crtc_funcs vc4_crtc_funcs = {
 	.reset = drm_atomic_helper_crtc_reset,
 	.atomic_duplicate_state = drm_atomic_helper_crtc_duplicate_state,
 	.atomic_destroy_state = drm_atomic_helper_crtc_destroy_state,
+	.enable_vblank = vc4_fkms_enable_vblank,
+	.disable_vblank = vc4_fkms_disable_vblank,
 };
 
 static const struct drm_crtc_helper_funcs vc4_crtc_helper_funcs = {
 	.mode_set_nofb = vc4_crtc_mode_set_nofb,
-	.disable = vc4_crtc_disable,
-	.enable = vc4_crtc_enable,
+	.atomic_disable = vc4_crtc_disable,
+	.atomic_enable = vc4_crtc_enable,
 	.atomic_check = vc4_crtc_atomic_check,
 	.atomic_flush = vc4_crtc_atomic_flush,
 };
@@ -533,7 +551,6 @@ static void vc4_fkms_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs vc4_fkms_connector_funcs = {
-	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = vc4_fkms_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = vc4_fkms_connector_destroy,
@@ -664,10 +681,6 @@ static int vc4_fkms_bind(struct device *dev, struct device *master, void *data)
 	drm_crtc_helper_add(crtc, &vc4_crtc_helper_funcs);
 	primary_plane->crtc = crtc;
 	cursor_plane->crtc = crtc;
-	vc4->crtc[drm_crtc_index(crtc)] = vc4_crtc;
-
-	vc4_crtc->primary = primary_plane;
-	vc4_crtc->cursor = cursor_plane;
 
 	vc4_encoder = devm_kzalloc(dev, sizeof(*vc4_encoder), GFP_KERNEL);
 	if (!vc4_encoder)

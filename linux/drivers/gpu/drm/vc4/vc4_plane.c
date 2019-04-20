@@ -23,62 +23,9 @@
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_plane_helper.h>
 
+#include "uapi/drm/vc4_drm.h"
 #include "vc4_drv.h"
 #include "vc4_regs.h"
-
-enum vc4_scaling_mode {
-	VC4_SCALING_NONE,
-	VC4_SCALING_TPZ,
-	VC4_SCALING_PPF,
-};
-
-struct vc4_plane_state {
-	struct drm_plane_state base;
-	/* System memory copy of the display list for this element, computed
-	 * at atomic_check time.
-	 */
-	u32 *dlist;
-	u32 dlist_size; /* Number of dwords allocated for the display list */
-	u32 dlist_count; /* Number of used dwords in the display list. */
-
-	/* Offset in the dlist to various words, for pageflip or
-	 * cursor updates.
-	 */
-	u32 pos0_offset;
-	u32 pos2_offset;
-	u32 ptr0_offset;
-
-	/* Offset where the plane's dlist was last stored in the
-	 * hardware at vc4_crtc_atomic_flush() time.
-	 */
-	u32 __iomem *hw_dlist;
-
-	/* Clipped coordinates of the plane on the display. */
-	int crtc_x, crtc_y, crtc_w, crtc_h;
-	/* Clipped area being scanned from in the FB. */
-	u32 src_x, src_y;
-
-	u32 src_w[2], src_h[2];
-
-	/* Scaling selection for the RGB/Y plane and the Cb/Cr planes. */
-	enum vc4_scaling_mode x_scaling[2], y_scaling[2];
-	bool is_unity;
-	bool is_yuv;
-
-	/* Offset to start scanning out from the start of the plane's
-	 * BO.
-	 */
-	u32 offsets[3];
-
-	/* Our allocation in LBM for temporary storage during scaling. */
-	struct drm_mm_node lbm;
-};
-
-static inline struct vc4_plane_state *
-to_vc4_plane_state(struct drm_plane_state *state)
-{
-	return (struct vc4_plane_state *)state;
-}
 
 static const struct hvs_format {
 	u32 drm; /* DRM_FORMAT_* */
@@ -318,8 +265,8 @@ static int vc4_plane_setup_clipping_and_scaling(struct drm_plane_state *state)
 	struct drm_framebuffer *fb = state->fb;
 	struct drm_gem_cma_object *bo = drm_fb_cma_get_gem_obj(fb, 0);
 	u32 subpixel_src_mask = (1 << 16) - 1;
-	u32 format = fb->pixel_format;
-	int num_planes = drm_format_num_planes(format);
+	u32 format = fb->format->format;
+	int num_planes = fb->format->num_planes;
 	u32 h_subsample = 1;
 	u32 v_subsample = 1;
 	int i;
@@ -350,6 +297,9 @@ static int vc4_plane_setup_clipping_and_scaling(struct drm_plane_state *state)
 	vc4_state->y_scaling[0] = vc4_get_scaling_mode(vc4_state->src_h[0],
 						       vc4_state->crtc_h);
 
+	vc4_state->is_unity = (vc4_state->x_scaling[0] == VC4_SCALING_NONE &&
+			       vc4_state->y_scaling[0] == VC4_SCALING_NONE);
+
 	if (num_planes > 1) {
 		vc4_state->is_yuv = true;
 
@@ -365,20 +315,17 @@ static int vc4_plane_setup_clipping_and_scaling(struct drm_plane_state *state)
 			vc4_get_scaling_mode(vc4_state->src_h[1],
 					     vc4_state->crtc_h);
 
-		/* YUV conversion requires that scaling be enabled,
-		 * even on a plane that's otherwise 1:1.  Choose TPZ
-		 * for simplicity.
+		/* YUV conversion requires that horizontal scaling be enabled,
+		 * even on a plane that's otherwise 1:1. Looks like only PPF
+		 * works in that case, so let's pick that one.
 		 */
-		if (vc4_state->x_scaling[0] == VC4_SCALING_NONE)
-			vc4_state->x_scaling[0] = VC4_SCALING_TPZ;
-		if (vc4_state->y_scaling[0] == VC4_SCALING_NONE)
-			vc4_state->y_scaling[0] = VC4_SCALING_TPZ;
+		if (vc4_state->is_unity)
+			vc4_state->x_scaling[0] = VC4_SCALING_PPF;
+	} else {
+		vc4_state->is_yuv = false;
+		vc4_state->x_scaling[1] = VC4_SCALING_NONE;
+		vc4_state->y_scaling[1] = VC4_SCALING_NONE;
 	}
-
-	vc4_state->is_unity = (vc4_state->x_scaling[0] == VC4_SCALING_NONE &&
-			       vc4_state->y_scaling[0] == VC4_SCALING_NONE &&
-			       vc4_state->x_scaling[1] == VC4_SCALING_NONE &&
-			       vc4_state->y_scaling[1] == VC4_SCALING_NONE);
 
 	/* No configuring scaling on the cursor plane, since it gets
 	   non-vblank-synced updates, and scaling requires requires
@@ -392,7 +339,7 @@ static int vc4_plane_setup_clipping_and_scaling(struct drm_plane_state *state)
 	 */
 	if (vc4_state->crtc_x < 0) {
 		for (i = 0; i < num_planes; i++) {
-			u32 cpp = drm_format_plane_cpp(fb->pixel_format, i);
+			u32 cpp = fb->format->cpp[i];
 			u32 subs = ((i == 0) ? 1 : h_subsample);
 
 			vc4_state->offsets[i] += (cpp *
@@ -519,11 +466,14 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 	struct vc4_plane_state *vc4_state = to_vc4_plane_state(state);
 	struct drm_framebuffer *fb = state->fb;
 	u32 ctl0_offset = vc4_state->dlist_count;
-	const struct hvs_format *format = vc4_get_hvs_format(fb->pixel_format);
+	const struct hvs_format *format = vc4_get_hvs_format(fb->format->format);
+	u64 base_format_mod = fourcc_mod_broadcom_mod(fb->modifier);
 	int num_planes = drm_format_num_planes(format->drm);
+	bool covers_screen;
 	u32 scl0, scl1, pitch0;
-	u32 lbm_size, tiling = SCALER_CTL0_TILING_LINEAR;
+	u32 lbm_size, tiling;
 	unsigned long irqflags;
+	u32 hvs_format = format->hvs;
 	int ret, i;
 
 	ret = vc4_plane_setup_clipping_and_scaling(state);
@@ -537,9 +487,9 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 	if (lbm_size) {
 		if (!vc4_state->lbm.allocated) {
 			spin_lock_irqsave(&vc4->hvs->mm_lock, irqflags);
-			ret = drm_mm_insert_node(&vc4->hvs->lbm_mm,
-						 &vc4_state->lbm,
-						 lbm_size, 32, 0);
+			ret = drm_mm_insert_node_generic(&vc4->hvs->lbm_mm,
+							 &vc4_state->lbm,
+							 lbm_size, 32, 0, 0);
 			spin_unlock_irqrestore(&vc4->hvs->mm_lock, irqflags);
 		} else {
 			WARN_ON_ONCE(lbm_size != vc4_state->lbm.size);
@@ -556,15 +506,15 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 	 * the scl fields here.
 	 */
 	if (num_planes == 1) {
-		scl0 = vc4_get_scl_field(state, 1);
+		scl0 = vc4_get_scl_field(state, 0);
 		scl1 = scl0;
 	} else {
 		scl0 = vc4_get_scl_field(state, 1);
 		scl1 = vc4_get_scl_field(state, 0);
 	}
 
-	switch (fb->modifier[0]) {
-	case DRM_FORMAT_MOD_NONE:
+	switch (base_format_mod) {
+	case DRM_FORMAT_MOD_LINEAR:
 		tiling = SCALER_CTL0_TILING_LINEAR;
 		pitch0 = VC4_SET_FIELD(fb->pitches[0], SCALER_SRC_PITCH);
 		break;
@@ -586,9 +536,52 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 		break;
 	}
 
+	case DRM_FORMAT_MOD_BROADCOM_SAND64:
+	case DRM_FORMAT_MOD_BROADCOM_SAND128:
+	case DRM_FORMAT_MOD_BROADCOM_SAND256: {
+		uint32_t param = fourcc_mod_broadcom_param(fb->modifier);
+
+		/* Column-based NV12 or RGBA.
+		 */
+		if (fb->format->num_planes > 1) {
+			if (hvs_format != HVS_PIXEL_FORMAT_YCBCR_YUV420_2PLANE) {
+				DRM_DEBUG_KMS("SAND format only valid for NV12/21");
+				return -EINVAL;
+			}
+			hvs_format = HVS_PIXEL_FORMAT_H264;
+		} else {
+			if (base_format_mod == DRM_FORMAT_MOD_BROADCOM_SAND256) {
+				DRM_DEBUG_KMS("SAND256 format only valid for H.264");
+				return -EINVAL;
+			}
+		}
+
+		switch (base_format_mod) {
+		case DRM_FORMAT_MOD_BROADCOM_SAND64:
+			tiling = SCALER_CTL0_TILING_64B;
+			break;
+		case DRM_FORMAT_MOD_BROADCOM_SAND128:
+			tiling = SCALER_CTL0_TILING_128B;
+			break;
+		case DRM_FORMAT_MOD_BROADCOM_SAND256:
+			tiling = SCALER_CTL0_TILING_256B_OR_T;
+			break;
+		default:
+			break;
+		}
+
+		if (param > SCALER_TILE_HEIGHT_MASK) {
+			DRM_DEBUG_KMS("SAND height too large (%d)\n", param);
+			return -EINVAL;
+		}
+
+		pitch0 = VC4_SET_FIELD(param, SCALER_TILE_HEIGHT);
+		break;
+	}
+
 	default:
 		DRM_DEBUG_KMS("Unsupported FB tiling flag 0x%16llx",
-			      (long long)fb->modifier[0]);
+			      (long long)fb->modifier);
 		return -EINVAL;
 	}
 
@@ -596,7 +589,7 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 	vc4_dlist_write(vc4_state,
 			SCALER_CTL0_VALID |
 			(format->pixel_order << SCALER_CTL0_ORDER_SHIFT) |
-			(format->hvs << SCALER_CTL0_PIXEL_FORMAT_SHIFT) |
+			(hvs_format << SCALER_CTL0_PIXEL_FORMAT_SHIFT) |
 			VC4_SET_FIELD(tiling, SCALER_CTL0_TILING) |
 			(vc4_state->is_unity ? SCALER_CTL0_UNITY : 0) |
 			VC4_SET_FIELD(scl0, SCALER_CTL0_SCL0) |
@@ -618,13 +611,14 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 					      SCALER_POS1_SCL_HEIGHT));
 	}
 
-	/* Position Word 2: Source Image Size, Alpha Mode */
+	/* Position Word 2: Source Image Size, Alpha */
 	vc4_state->pos2_offset = vc4_state->dlist_count;
 	vc4_dlist_write(vc4_state,
 			VC4_SET_FIELD(format->has_alpha ?
 				      SCALER_POS2_ALPHA_MODE_PIPELINE :
 				      SCALER_POS2_ALPHA_MODE_FIXED,
 				      SCALER_POS2_ALPHA_MODE) |
+			(format->has_alpha ? SCALER_POS2_ALPHA_PREMULT : 0) |
 			VC4_SET_FIELD(vc4_state->src_w[0], SCALER_POS2_WIDTH) |
 			VC4_SET_FIELD(vc4_state->src_h[0], SCALER_POS2_HEIGHT));
 
@@ -649,8 +643,13 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 
 	/* Pitch word 1/2 */
 	for (i = 1; i < num_planes; i++) {
-		vc4_dlist_write(vc4_state,
-				VC4_SET_FIELD(fb->pitches[i], SCALER_SRC_PITCH));
+		if (hvs_format != HVS_PIXEL_FORMAT_H264) {
+			vc4_dlist_write(vc4_state,
+					VC4_SET_FIELD(fb->pitches[i],
+						      SCALER_SRC_PITCH));
+		} else {
+			vc4_dlist_write(vc4_state, pitch0);
+		}
 	}
 
 	/* Colorspace conversion words */
@@ -660,7 +659,10 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 		vc4_dlist_write(vc4_state, SCALER_CSC2_ITR_R_601_5);
 	}
 
-	if (!vc4_state->is_unity) {
+	if (vc4_state->x_scaling[0] != VC4_SCALING_NONE ||
+	    vc4_state->x_scaling[1] != VC4_SCALING_NONE ||
+	    vc4_state->y_scaling[0] != VC4_SCALING_NONE ||
+	    vc4_state->y_scaling[1] != VC4_SCALING_NONE) {
 		/* LBM Base Address. */
 		if (vc4_state->y_scaling[0] != VC4_SCALING_NONE ||
 		    vc4_state->y_scaling[1] != VC4_SCALING_NONE) {
@@ -699,6 +701,16 @@ static int vc4_plane_mode_set(struct drm_plane *plane,
 
 	vc4_state->dlist[ctl0_offset] |=
 		VC4_SET_FIELD(vc4_state->dlist_count, SCALER_CTL0_SIZE);
+
+	/* crtc_* are already clipped coordinates. */
+	covers_screen = vc4_state->crtc_x == 0 && vc4_state->crtc_y == 0 &&
+			vc4_state->crtc_w == state->crtc->mode.hdisplay &&
+			vc4_state->crtc_h == state->crtc->mode.vdisplay;
+	/* Background fill might be necessary when the plane has per-pixel
+	 * alpha content and blends from the background or does not cover
+	 * the entire screen.
+	 */
+	vc4_state->needs_bg_fill = format->has_alpha || !covers_screen;
 
 	return 0;
 }
@@ -783,9 +795,45 @@ void vc4_plane_async_set_fb(struct drm_plane *plane, struct drm_framebuffer *fb)
 	vc4_state->dlist[vc4_state->ptr0_offset] = addr;
 }
 
+static int vc4_prepare_fb(struct drm_plane *plane,
+			  struct drm_plane_state *state)
+{
+	struct vc4_bo *bo;
+	struct dma_fence *fence;
+	int ret;
+
+	if ((plane->state->fb == state->fb) || !state->fb)
+		return 0;
+
+	bo = to_vc4_bo(&drm_fb_cma_get_gem_obj(state->fb, 0)->base);
+
+	ret = vc4_bo_inc_usecnt(bo);
+	if (ret)
+		return ret;
+
+	fence = reservation_object_get_excl_rcu(bo->resv);
+	drm_atomic_set_fence_for_plane(state, fence);
+
+	return 0;
+}
+
+static void vc4_cleanup_fb(struct drm_plane *plane,
+			   struct drm_plane_state *state)
+{
+	struct vc4_bo *bo;
+
+	if (plane->state->fb == state->fb || !state->fb)
+		return;
+
+	bo = to_vc4_bo(&drm_fb_cma_get_gem_obj(state->fb, 0)->base);
+	vc4_bo_dec_usecnt(bo);
+}
+
 static const struct drm_plane_helper_funcs vc4_plane_helper_funcs = {
 	.atomic_check = vc4_plane_atomic_check,
 	.atomic_update = vc4_plane_atomic_update,
+	.prepare_fb = vc4_prepare_fb,
+	.cleanup_fb = vc4_cleanup_fb,
 };
 
 static void vc4_plane_destroy(struct drm_plane *plane)
@@ -804,7 +852,8 @@ vc4_update_plane(struct drm_plane *plane,
 		 int crtc_x, int crtc_y,
 		 unsigned int crtc_w, unsigned int crtc_h,
 		 uint32_t src_x, uint32_t src_y,
-		 uint32_t src_w, uint32_t src_h)
+		 uint32_t src_w, uint32_t src_h,
+		 struct drm_modeset_acquire_ctx *ctx)
 {
 	struct drm_plane_state *plane_state;
 	struct vc4_plane_state *vc4_state;
@@ -865,7 +914,53 @@ out:
 					      crtc_x, crtc_y,
 					      crtc_w, crtc_h,
 					      src_x, src_y,
-					      src_w, src_h);
+					      src_w, src_h,
+					      ctx);
+}
+
+static bool vc4_format_mod_supported(struct drm_plane *plane,
+				     uint32_t format,
+				     uint64_t modifier)
+{
+	/* Support T_TILING for RGB formats only. */
+	switch (format) {
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+	case DRM_FORMAT_ABGR8888:
+	case DRM_FORMAT_XBGR8888:
+	case DRM_FORMAT_RGB565:
+	case DRM_FORMAT_BGR565:
+	case DRM_FORMAT_ARGB1555:
+	case DRM_FORMAT_XRGB1555:
+		switch (fourcc_mod_broadcom_mod(modifier)) {
+		case DRM_FORMAT_MOD_LINEAR:
+		case DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED:
+		case DRM_FORMAT_MOD_BROADCOM_SAND64:
+		case DRM_FORMAT_MOD_BROADCOM_SAND128:
+			return true;
+		default:
+			return false;
+		}
+	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV21:
+		switch (fourcc_mod_broadcom_mod(modifier)) {
+		case DRM_FORMAT_MOD_LINEAR:
+		case DRM_FORMAT_MOD_BROADCOM_SAND64:
+		case DRM_FORMAT_MOD_BROADCOM_SAND128:
+		case DRM_FORMAT_MOD_BROADCOM_SAND256:
+			return true;
+		default:
+			return false;
+		}
+	case DRM_FORMAT_YUV422:
+	case DRM_FORMAT_YVU422:
+	case DRM_FORMAT_YUV420:
+	case DRM_FORMAT_YVU420:
+	case DRM_FORMAT_NV16:
+	case DRM_FORMAT_NV61:
+	default:
+		return (modifier == DRM_FORMAT_MOD_LINEAR);
+	}
 }
 
 static const struct drm_plane_funcs vc4_plane_funcs = {
@@ -876,6 +971,7 @@ static const struct drm_plane_funcs vc4_plane_funcs = {
 	.reset = vc4_plane_reset,
 	.atomic_duplicate_state = vc4_plane_duplicate_state,
 	.atomic_destroy_state = vc4_plane_destroy_state,
+	.format_mod_supported = vc4_format_mod_supported,
 };
 
 struct drm_plane *vc4_plane_init(struct drm_device *dev,
@@ -887,13 +983,19 @@ struct drm_plane *vc4_plane_init(struct drm_device *dev,
 	u32 num_formats = 0;
 	int ret = 0;
 	unsigned i;
+	static const uint64_t modifiers[] = {
+		DRM_FORMAT_MOD_BROADCOM_VC4_T_TILED,
+		DRM_FORMAT_MOD_BROADCOM_SAND128,
+		DRM_FORMAT_MOD_BROADCOM_SAND64,
+		DRM_FORMAT_MOD_BROADCOM_SAND256,
+		DRM_FORMAT_MOD_LINEAR,
+		DRM_FORMAT_MOD_INVALID
+	};
 
 	vc4_plane = devm_kzalloc(dev->dev, sizeof(*vc4_plane),
 				 GFP_KERNEL);
-	if (!vc4_plane) {
-		ret = -ENOMEM;
-		goto fail;
-	}
+	if (!vc4_plane)
+		return ERR_PTR(-ENOMEM);
 
 	for (i = 0; i < ARRAY_SIZE(hvs_formats); i++) {
 		/* Don't allow YUV in cursor planes, since that means
@@ -906,17 +1008,12 @@ struct drm_plane *vc4_plane_init(struct drm_device *dev,
 		}
 	}
 	plane = &vc4_plane->base;
-	ret = drm_universal_plane_init(dev, plane, 0xff,
+	ret = drm_universal_plane_init(dev, plane, 0,
 				       &vc4_plane_funcs,
 				       formats, num_formats,
-				       type, NULL);
+				       modifiers, type, NULL);
 
 	drm_plane_helper_add(plane, &vc4_plane_helper_funcs);
 
 	return plane;
-fail:
-	if (plane)
-		vc4_plane_destroy(plane);
-
-	return ERR_PTR(ret);
 }

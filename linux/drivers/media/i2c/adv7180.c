@@ -12,10 +12,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/module.h>
@@ -192,6 +188,10 @@
 #define ADV7180_DEFAULT_VPP_I2C_ADDR 0x42
 
 #define V4L2_CID_ADV_FAST_SWITCH	(V4L2_CID_USER_ADV7180_BASE + 0x00)
+
+static int dbg_input;
+module_param(dbg_input, int, 0644);
+MODULE_PARM_DESC(dbg_input, "Input number (0-31)");
 
 struct adv7180_state;
 
@@ -409,10 +409,24 @@ out:
 	return ret;
 }
 
+static void adv7180_check_input(struct v4l2_subdev *sd)
+{
+	struct adv7180_state *state = to_state(sd);
+
+	if (state->input != dbg_input)
+		if (adv7180_s_routing(sd, dbg_input, 0, 0))
+			/* Failed - reset dbg_input */
+			dbg_input = state->input;
+}
+
 static int adv7180_g_input_status(struct v4l2_subdev *sd, u32 *status)
 {
 	struct adv7180_state *state = to_state(sd);
-	int ret = mutex_lock_interruptible(&state->mutex);
+	int ret;
+
+	adv7180_check_input(sd);
+
+	ret = mutex_lock_interruptible(&state->mutex);
 	if (ret)
 		return ret;
 
@@ -438,7 +452,11 @@ static int adv7180_program_std(struct adv7180_state *state)
 static int adv7180_s_std(struct v4l2_subdev *sd, v4l2_std_id std)
 {
 	struct adv7180_state *state = to_state(sd);
-	int ret = mutex_lock_interruptible(&state->mutex);
+	int ret;
+
+	adv7180_check_input(sd);
+
+	ret = mutex_lock_interruptible(&state->mutex);
 
 	if (ret)
 		return ret;
@@ -459,6 +477,8 @@ out:
 static int adv7180_g_std(struct v4l2_subdev *sd, v4l2_std_id *norm)
 {
 	struct adv7180_state *state = to_state(sd);
+
+	adv7180_check_input(sd);
 
 	*norm = state->curr_norm;
 
@@ -794,6 +814,8 @@ static int adv7180_s_stream(struct v4l2_subdev *sd, int enable)
 		state->streaming = enable;
 		return 0;
 	}
+
+	adv7180_check_input(sd);
 
 	/* Must wait until querystd released the lock */
 	ret = mutex_lock_interruptible(&state->mutex);
@@ -1213,6 +1235,7 @@ static const struct adv7180_chip_info adv7282_m_info = {
 		BIT(ADV7182_INPUT_SVIDEO_AIN1_AIN2) |
 		BIT(ADV7182_INPUT_SVIDEO_AIN3_AIN4) |
 		BIT(ADV7182_INPUT_SVIDEO_AIN7_AIN8) |
+		BIT(ADV7182_INPUT_YPRPB_AIN1_AIN2_AIN3) |
 		BIT(ADV7182_INPUT_DIFF_CVBS_AIN1_AIN2) |
 		BIT(ADV7182_INPUT_DIFF_CVBS_AIN3_AIN4) |
 		BIT(ADV7182_INPUT_DIFF_CVBS_AIN7_AIN8),
@@ -1224,6 +1247,7 @@ static const struct adv7180_chip_info adv7282_m_info = {
 static int init_device(struct adv7180_state *state)
 {
 	int ret;
+	int i;
 
 	mutex_lock(&state->mutex);
 
@@ -1268,6 +1292,18 @@ static int init_device(struct adv7180_state *state)
 		ret = adv7180_write(state, ADV7180_REG_IMR4, 0);
 		if (ret < 0)
 			goto out_unlock;
+	}
+
+	/* Select first valid input */
+	for (i = 0; i < 32; i++) {
+		if (BIT(i) & state->chip_info->valid_input_mask) {
+			ret = state->chip_info->select_input(state, i);
+
+			if (ret == 0) {
+				state->input = i;
+				break;
+			}
+		}
 	}
 
 out_unlock:
@@ -1406,6 +1442,8 @@ static int adv7180_remove(struct i2c_client *client)
 
 static const struct i2c_device_id adv7180_id[] = {
 	{ "adv7180", (kernel_ulong_t)&adv7180_info },
+	{ "adv7180cp", (kernel_ulong_t)&adv7180_info },
+	{ "adv7180st", (kernel_ulong_t)&adv7180_info },
 	{ "adv7182", (kernel_ulong_t)&adv7182_info },
 	{ "adv7280", (kernel_ulong_t)&adv7280_info },
 	{ "adv7280-m", (kernel_ulong_t)&adv7280_m_info },
@@ -1456,6 +1494,8 @@ static SIMPLE_DEV_PM_OPS(adv7180_pm_ops, adv7180_suspend, adv7180_resume);
 #ifdef CONFIG_OF
 static const struct of_device_id adv7180_of_id[] = {
 	{ .compatible = "adi,adv7180", },
+	{ .compatible = "adi,adv7180cp", },
+	{ .compatible = "adi,adv7180st", },
 	{ .compatible = "adi,adv7182", },
 	{ .compatible = "adi,adv7280", },
 	{ .compatible = "adi,adv7280-m", },

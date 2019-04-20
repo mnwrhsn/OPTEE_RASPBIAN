@@ -99,7 +99,6 @@ inline void fiq_fsm_spin_lock(fiq_lock_t *lock)
 	unsigned long tmp;
 	uint32_t newval;
 	fiq_lock_t lockval;
-	smp_mb__before_spinlock();
 	/* Nested locking, yay. If we are on the same CPU as the fiq, then the disable
 	 * will be sufficient. If we are on a different CPU, then the lock protects us. */
 	prefetchw(&lock->slock);
@@ -251,7 +250,7 @@ static int notrace fiq_increment_dma_buf(struct fiq_state *st, int num_channels,
 		BUG();
 
 	hcdma.d32 = (dma_addr_t) &blob->channel[n].index[i].buf[0];
-	FIQ_WRITE(st->dwc_regs_base + HC_DMA + (HC_OFFSET * n), hcdma.d32);
+	FIQ_WRITE(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HC_DMA, hcdma.d32);
 	st->channel[n].dma_info.index = i;
 	return 0;
 }
@@ -265,6 +264,15 @@ static void notrace fiq_fsm_reload_hctsiz(struct fiq_state *st, int n)
 	hctsiz.b.xfersize = st->channel[n].hctsiz_copy.b.xfersize;
 	hctsiz.b.pktcnt = 1;
 	FIQ_WRITE(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HCTSIZ, hctsiz.d32);
+}
+
+/**
+ * fiq_fsm_reload_hcdma() - for OUT transactions, rewind DMA pointer
+ */
+static void notrace fiq_fsm_reload_hcdma(struct fiq_state *st, int n)
+{
+	hcdma_data_t hcdma = st->channel[n].hcdma_copy;
+	FIQ_WRITE(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HC_DMA, hcdma.d32);
 }
 
 /**
@@ -294,7 +302,7 @@ static int notrace fiq_iso_out_advance(struct fiq_state *st, int num_channels, i
 
 	/* New DMA address - address of bounce buffer referred to in index */
 	hcdma.d32 = (uint32_t) &blob->channel[n].index[i].buf[0];
-	//hcdma.d32 = FIQ_READ(st->dwc_regs_base + HC_DMA + (HC_OFFSET * n));
+	//hcdma.d32 = FIQ_READ(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HC_DMA);
 	//hcdma.d32 += st->channel[n].dma_info.slot_len[i];
 	fiq_print(FIQDBG_INT, st, "LAST: %01d ", last);
 	fiq_print(FIQDBG_INT, st, "LEN: %03d", st->channel[n].dma_info.slot_len[i]);
@@ -309,7 +317,7 @@ static int notrace fiq_iso_out_advance(struct fiq_state *st, int num_channels, i
 	st->channel[n].dma_info.index++;
 	FIQ_WRITE(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HCSPLT, hcsplt.d32);
 	FIQ_WRITE(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HCTSIZ, hctsiz.d32);
-	FIQ_WRITE(st->dwc_regs_base + HC_DMA + (HC_OFFSET * n), hcdma.d32);
+	FIQ_WRITE(st->dwc_regs_base + HC_START + (HC_OFFSET * n) + HC_DMA, hcdma.d32);
 	return last;
 }
 
@@ -556,7 +564,7 @@ static int notrace noinline fiq_fsm_update_hs_isoc(struct fiq_state *state, int 
 
 	/* grab the next DMA address offset from the array */
 	hcdma.d32 = st->hcdma_copy.d32 + st->hs_isoc_info.iso_desc[st->hs_isoc_info.index].offset;
-	FIQ_WRITE(state->dwc_regs_base + HC_DMA + (HC_OFFSET * n), hcdma.d32);
+	FIQ_WRITE(state->dwc_regs_base + HC_START + (HC_OFFSET * n) + HC_DMA, hcdma.d32);
 
 	/* We need to set multi_count. This is a bit tricky - has to be set per-transaction as
 	 * the core needs to be told to send the correct number. Caution: for IN transfers,
@@ -583,8 +591,8 @@ static int notrace noinline fiq_fsm_update_hs_isoc(struct fiq_state *state, int 
 		}
 
 	} else {
-		switch (st->hcchar_copy.b.multicnt) {
 		st->hctsiz_copy.b.xfersize = nrpackets * st->hcchar_copy.b.mps;
+		switch (st->hcchar_copy.b.multicnt) {
 		case 1:
 			st->hctsiz_copy.b.pid = DWC_PID_DATA0;
 			break;
@@ -828,11 +836,14 @@ static int notrace noinline fiq_fsm_do_hcintr(struct fiq_state *state, int num_c
 			fiq_fsm_setup_csplit(state, n);
 		} else if (hcint.b.nak) {
 			// No buffer space in TT. Retry on a uframe boundary.
+			fiq_fsm_reload_hcdma(state, n);
 			st->fsm = FIQ_NP_SSPLIT_RETRY;
 			handled = 1;
 		} else if (hcint.b.xacterr) {
 			// The only other one we care about is xacterr. This implies HS bus error - retry.
 			st->nr_errors++;
+			if(st->hcchar_copy.b.epdir == 0)
+				fiq_fsm_reload_hcdma(state, n);
 			st->fsm = FIQ_NP_SSPLIT_RETRY;
 			if (st->nr_errors >= 3) {
 				st->fsm = FIQ_NP_SPLIT_HS_ABORTED;

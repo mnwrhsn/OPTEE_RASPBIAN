@@ -786,6 +786,8 @@ __inline static void _set_workitem(_workitem *pwork)
 	#include <linux/interrupt.h>	// for struct tasklet_struct
 	#include <linux/ip.h>
 	#include <linux/kthread.h>
+	#include <linux/signal.h>
+	#include <linux/sched/signal.h>
 
 #ifdef CONFIG_IOCTL_CFG80211
 //	#include <linux/ieee80211.h>

@@ -310,6 +310,14 @@ static int ehci_bus_suspend (struct usb_hcd *hcd)
 	}
 	spin_unlock_irq(&ehci->lock);
 
+	if (changed && ehci_has_fsl_susp_errata(ehci))
+		/*
+		 * Wait for at least 10 millisecondes to ensure the controller
+		 * enter the suspend status before initiating a port resume
+		 * using the Force Port Resume bit (Not-EHCI compatible).
+		 */
+		usleep_range(10000, 20000);
+
 	if ((changed && ehci->has_tdi_phy_lpm) || fs_idle_delay) {
 		/*
 		 * Wait for HCD to enter low-power mode or for the bus
@@ -779,12 +787,12 @@ static struct urb *request_single_step_set_feature_urb(
 	atomic_inc(&urb->use_count);
 	atomic_inc(&urb->dev->urbnum);
 	urb->setup_dma = dma_map_single(
-			hcd->self.controller,
+			hcd->self.sysdev,
 			urb->setup_packet,
 			sizeof(struct usb_ctrlrequest),
 			DMA_TO_DEVICE);
 	urb->transfer_dma = dma_map_single(
-			hcd->self.controller,
+			hcd->self.sysdev,
 			urb->transfer_buffer,
 			urb->transfer_buffer_length,
 			DMA_FROM_DEVICE);
@@ -1199,6 +1207,12 @@ int ehci_hub_control(
 				ehci_dbg(ehci, "Port%d phy low pwr mode %s\n",
 					wIndex, (temp1 & HOSTPC_PHCD) ?
 					"succeeded" : "failed");
+			}
+			if (ehci_has_fsl_susp_errata(ehci)) {
+				/* 10ms for HCD enter suspend */
+				spin_unlock_irqrestore(&ehci->lock, flags);
+				usleep_range(10000, 20000);
+				spin_lock_irqsave(&ehci->lock, flags);
 			}
 			set_bit(wIndex, &ehci->suspended_ports);
 			break;

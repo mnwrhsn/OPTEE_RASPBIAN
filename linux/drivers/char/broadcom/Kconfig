@@ -25,7 +25,7 @@ endif
 
 config BCM_VC_SM
 	bool "VMCS Shared Memory"
-	depends on BCM2708_VCHIQ
+	depends on BCM2835_VCHIQ
 	select BCM2708_VCMEM
 	select DMA_SHARED_BUFFER
 	default n

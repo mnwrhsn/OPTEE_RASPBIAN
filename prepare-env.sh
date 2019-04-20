@@ -82,9 +82,7 @@
 	echo  "\033[32mlinux package existed.\n\033[0m"
 } || {
 	echo  "\033[32mlinux downloading...\n\033[0m"
-	# wget -O dl/linux.tar.gz https://github.com/raspberrypi/linux/archive/raspberrypi-kernel_1.20190215-1.tar.gz
-	# Use the 2018-03-13-raspbian-stretch-lite image in RPi3
-	wget -O dl/linux.tar.gz https://github.com/raspberrypi/linux/archive/raspberrypi-kernel_1.20180313-1.tar.gz
+	wget -O dl/linux.tar.gz https://github.com/raspberrypi/linux/archive/raspberrypi-kernel_1.20190215-1.tar.gz
 }
 
 [ ! -d "./linux" ] && {

@@ -63,17 +63,29 @@
 					 V4L2_MBUS_CSI2_3_LANE | V4L2_MBUS_CSI2_4_LANE)
 #define V4L2_MBUS_CSI2_CHANNELS		(V4L2_MBUS_CSI2_CHANNEL_0 | V4L2_MBUS_CSI2_CHANNEL_1 | \
 					 V4L2_MBUS_CSI2_CHANNEL_2 | V4L2_MBUS_CSI2_CHANNEL_3)
+/*
+ * Number of lanes in use, 0 == use all available lanes (default)
+ *
+ * This is a temporary fix for devices that need to reduce the number of active
+ * lanes for certain modes, until g_mbus_config() can be replaced with a better
+ * solution.
+ */
+#define V4L2_MBUS_CSI2_LANE_MASK                (0xf << 10)
 
 /**
  * enum v4l2_mbus_type - media bus type
  * @V4L2_MBUS_PARALLEL:	parallel interface with hsync and vsync
  * @V4L2_MBUS_BT656:	parallel interface with embedded synchronisation, can
  *			also be used for BT.1120
+ * @V4L2_MBUS_CSI1:	MIPI CSI-1 serial interface
+ * @V4L2_MBUS_CCP2:	CCP2 (Compact Camera Port 2)
  * @V4L2_MBUS_CSI2:	MIPI CSI-2 serial interface
  */
 enum v4l2_mbus_type {
 	V4L2_MBUS_PARALLEL,
 	V4L2_MBUS_BT656,
+	V4L2_MBUS_CSI1,
+	V4L2_MBUS_CCP2,
 	V4L2_MBUS_CSI2,
 };
 
@@ -111,6 +123,32 @@ static inline void v4l2_fill_mbus_format(struct v4l2_mbus_framefmt *mbus_fmt,
 	mbus_fmt->quantization = pix_fmt->quantization;
 	mbus_fmt->xfer_func = pix_fmt->xfer_func;
 	mbus_fmt->code = code;
+}
+
+static inline void v4l2_fill_pix_format_mplane(
+				struct v4l2_pix_format_mplane *pix_mp_fmt,
+				const struct v4l2_mbus_framefmt *mbus_fmt)
+{
+	pix_mp_fmt->width = mbus_fmt->width;
+	pix_mp_fmt->height = mbus_fmt->height;
+	pix_mp_fmt->field = mbus_fmt->field;
+	pix_mp_fmt->colorspace = mbus_fmt->colorspace;
+	pix_mp_fmt->ycbcr_enc = mbus_fmt->ycbcr_enc;
+	pix_mp_fmt->quantization = mbus_fmt->quantization;
+	pix_mp_fmt->xfer_func = mbus_fmt->xfer_func;
+}
+
+static inline void v4l2_fill_mbus_format_mplane(
+				struct v4l2_mbus_framefmt *mbus_fmt,
+				const struct v4l2_pix_format_mplane *pix_mp_fmt)
+{
+	mbus_fmt->width = pix_mp_fmt->width;
+	mbus_fmt->height = pix_mp_fmt->height;
+	mbus_fmt->field = pix_mp_fmt->field;
+	mbus_fmt->colorspace = pix_mp_fmt->colorspace;
+	mbus_fmt->ycbcr_enc = pix_mp_fmt->ycbcr_enc;
+	mbus_fmt->quantization = pix_mp_fmt->quantization;
+	mbus_fmt->xfer_func = pix_mp_fmt->xfer_func;
 }
 
 #endif

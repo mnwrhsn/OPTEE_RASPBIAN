@@ -62,7 +62,8 @@ int soc_camera_client_g_rect(struct v4l2_subdev *sd, struct v4l2_rect *rect)
 EXPORT_SYMBOL(soc_camera_client_g_rect);
 
 /* Client crop has changed, update our sub-rectangle to remain within the area */
-static void update_subrect(struct v4l2_rect *rect, struct v4l2_rect *subrect)
+static void move_and_crop_subrect(struct v4l2_rect *rect,
+				  struct v4l2_rect *subrect)
 {
 	if (rect->width < subrect->width)
 		subrect->width = rect->width;
@@ -72,14 +73,14 @@ static void update_subrect(struct v4l2_rect *rect, struct v4l2_rect *subrect)
 
 	if (rect->left > subrect->left)
 		subrect->left = rect->left;
-	else if (rect->left + rect->width >
+	else if (rect->left + rect->width <
 		 subrect->left + subrect->width)
 		subrect->left = rect->left + rect->width -
 			subrect->width;
 
 	if (rect->top > subrect->top)
 		subrect->top = rect->top;
-	else if (rect->top + rect->height >
+	else if (rect->top + rect->height <
 		 subrect->top + subrect->height)
 		subrect->top = rect->top + rect->height -
 			subrect->height;
@@ -216,7 +217,7 @@ int soc_camera_client_s_selection(struct v4l2_subdev *sd,
 
 	if (!ret) {
 		*target_rect = *cam_rect;
-		update_subrect(target_rect, subrect);
+		move_and_crop_subrect(target_rect, subrect);
 	}
 
 	return ret;
@@ -299,7 +300,7 @@ update_cache:
 	if (host_1to1)
 		*subrect = *rect;
 	else
-		update_subrect(rect, subrect);
+		move_and_crop_subrect(rect, subrect);
 
 	return 0;
 }
@@ -418,3 +419,7 @@ void soc_camera_calc_client_output(struct soc_camera_device *icd,
 	mf->height = soc_camera_shift_scale(rect->height, shift, scale_v);
 }
 EXPORT_SYMBOL(soc_camera_calc_client_output);
+
+MODULE_DESCRIPTION("soc-camera scaling-cropping functions");
+MODULE_AUTHOR("Guennadi Liakhovetski <kernel@pengutronix.de>");
+MODULE_LICENSE("GPL");

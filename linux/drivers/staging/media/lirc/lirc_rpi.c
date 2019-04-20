@@ -566,12 +566,8 @@ static struct lirc_driver driver = {
 	.name		= LIRC_DRIVER_NAME,
 	.minor		= -1,
 	.code_length	= 1,
-	.sample_rate	= 0,
 	.data		= NULL,
-	.add_to_buf	= NULL,
 	.rbuf		= &rbuf,
-	.set_use_inc	= set_use_inc,
-	.set_use_dec	= set_use_dec,
 	.fops		= &lirc_fops,
 	.dev		= NULL,
 	.owner		= THIS_MODULE,
@@ -645,6 +641,7 @@ static int __init lirc_rpi_init(void)
 
 static void lirc_rpi_exit(void)
 {
+	set_use_dec(NULL);
 	if (!lirc_rpi_dev->dev.of_node)
 		platform_device_unregister(lirc_rpi_dev);
 	platform_driver_unregister(&lirc_rpi_driver);
@@ -679,6 +676,8 @@ static int __init lirc_rpi_init_module(void)
 	}
 
 	printk(KERN_INFO LIRC_DRIVER_NAME ": driver registered!\n");
+
+	set_use_inc(NULL);
 
 	return 0;
 

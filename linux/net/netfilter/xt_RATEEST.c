@@ -39,22 +39,30 @@ static void xt_rateest_hash_insert(struct xt_rateest *est)
 	hlist_add_head(&est->list, &rateest_hash[h]);
 }
 
-struct xt_rateest *xt_rateest_lookup(const char *name)
+static struct xt_rateest *__xt_rateest_lookup(const char *name)
 {
 	struct xt_rateest *est;
 	unsigned int h;
 
 	h = xt_rateest_hash(name);
-	mutex_lock(&xt_rateest_mutex);
 	hlist_for_each_entry(est, &rateest_hash[h], list) {
 		if (strcmp(est->name, name) == 0) {
 			est->refcnt++;
-			mutex_unlock(&xt_rateest_mutex);
 			return est;
 		}
 	}
-	mutex_unlock(&xt_rateest_mutex);
+
 	return NULL;
+}
+
+struct xt_rateest *xt_rateest_lookup(const char *name)
+{
+	struct xt_rateest *est;
+
+	mutex_lock(&xt_rateest_mutex);
+	est = __xt_rateest_lookup(name);
+	mutex_unlock(&xt_rateest_mutex);
+	return est;
 }
 EXPORT_SYMBOL_GPL(xt_rateest_lookup);
 
@@ -63,7 +71,7 @@ void xt_rateest_put(struct xt_rateest *est)
 	mutex_lock(&xt_rateest_mutex);
 	if (--est->refcnt == 0) {
 		hlist_del(&est->list);
-		gen_kill_estimator(&est->bstats, &est->rstats);
+		gen_kill_estimator(&est->rate_est);
 		/*
 		 * gen_estimator est_timer() might access est->lock or bstats,
 		 * wait a RCU grace period before freeing 'est'
@@ -100,8 +108,10 @@ static int xt_rateest_tg_checkentry(const struct xt_tgchk_param *par)
 
 	net_get_random_once(&jhash_rnd, sizeof(jhash_rnd));
 
-	est = xt_rateest_lookup(info->name);
+	mutex_lock(&xt_rateest_mutex);
+	est = __xt_rateest_lookup(info->name);
 	if (est) {
+		mutex_unlock(&xt_rateest_mutex);
 		/*
 		 * If estimator parameters are specified, they must match the
 		 * existing estimator.
@@ -132,18 +142,20 @@ static int xt_rateest_tg_checkentry(const struct xt_tgchk_param *par)
 	cfg.est.interval	= info->interval;
 	cfg.est.ewma_log	= info->ewma_log;
 
-	ret = gen_new_estimator(&est->bstats, NULL, &est->rstats,
+	ret = gen_new_estimator(&est->bstats, NULL, &est->rate_est,
 				&est->lock, NULL, &cfg.opt);
 	if (ret < 0)
 		goto err2;
 
 	info->est = est;
 	xt_rateest_hash_insert(est);
+	mutex_unlock(&xt_rateest_mutex);
 	return 0;
 
 err2:
 	kfree(est);
 err1:
+	mutex_unlock(&xt_rateest_mutex);
 	return ret;
 }
 
@@ -162,6 +174,7 @@ static struct xt_target xt_rateest_tg_reg __read_mostly = {
 	.checkentry = xt_rateest_tg_checkentry,
 	.destroy    = xt_rateest_tg_destroy,
 	.targetsize = sizeof(struct xt_rateest_target_info),
+	.usersize   = offsetof(struct xt_rateest_target_info, est),
 	.me         = THIS_MODULE,
 };
 

@@ -20,7 +20,7 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/debugfs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/dma-mapping.h>
 #include <linux/broadcom/vc_mem.h>
 

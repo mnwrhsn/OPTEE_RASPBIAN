@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 # Please keep these build lists sorted!
 
 # core driver code
@@ -7,6 +8,7 @@ vc4-y := \
 	vc4_drv.o \
 	vc4_dpi.o \
 	vc4_dsi.o \
+	vc4_fence.o \
 	vc4_firmware_kms.o \
 	vc4_kms.o \
 	vc4_gem.o \

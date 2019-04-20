@@ -292,6 +292,10 @@ int rxrpc_send_data_packet(struct rxrpc_call *call, struct sk_buff *skb,
 	whdr._rsvd	= htons(sp->hdr._rsvd);
 	whdr.serviceId	= htons(call->service_id);
 
+	if (test_bit(RXRPC_CONN_PROBING_FOR_UPGRADE, &conn->flags) &&
+	    sp->hdr.seq == 1)
+		whdr.userStatus	= RXRPC_USERSTATUS_SERVICE_UPGRADE;
+
 	iov[0].iov_base = &whdr;
 	iov[0].iov_len = sizeof(whdr);
 	iov[1].iov_base = skb->head;
@@ -391,7 +395,7 @@ send_fragmentable:
 					(char *)&opt, sizeof(opt));
 		if (ret == 0) {
 			ret = kernel_sendmsg(conn->params.local->socket, &msg,
-					     iov, 1, iov[0].iov_len);
+					     iov, 2, len);
 
 			opt = IPV6_PMTUDISC_DO;
 			kernel_setsockopt(conn->params.local->socket,
@@ -440,7 +444,7 @@ void rxrpc_reject_packets(struct rxrpc_local *local)
 		rxrpc_see_skb(skb, rxrpc_skb_rx_seen);
 		sp = rxrpc_skb(skb);
 
-		if (rxrpc_extract_addr_from_skb(&srx, skb) == 0) {
+		if (rxrpc_extract_addr_from_skb(local, &srx, skb) == 0) {
 			msg.msg_namelen = srx.transport_len;
 
 			code = htonl(skb->priority);

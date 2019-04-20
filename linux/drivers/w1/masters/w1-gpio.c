@@ -20,8 +20,7 @@
 #include <linux/of.h>
 #include <linux/delay.h>
 
-#include "../w1.h"
-#include "../w1_int.h"
+#include <linux/w1.h>
 
 static int w1_gpio_pullup = 0;
 static int w1_gpio_pullup_orig = 0;

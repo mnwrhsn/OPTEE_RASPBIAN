@@ -483,17 +483,17 @@ struct bcm2835_pll_ana_bits {
 static const struct bcm2835_pll_ana_bits bcm2835_ana_default = {
 	.mask0 = 0,
 	.set0 = 0,
-	.mask1 = (u32)~(A2W_PLL_KI_MASK | A2W_PLL_KP_MASK),
+	.mask1 = A2W_PLL_KI_MASK | A2W_PLL_KP_MASK,
 	.set1 = (2 << A2W_PLL_KI_SHIFT) | (8 << A2W_PLL_KP_SHIFT),
-	.mask3 = (u32)~A2W_PLL_KA_MASK,
+	.mask3 = A2W_PLL_KA_MASK,
 	.set3 = (2 << A2W_PLL_KA_SHIFT),
 	.fb_prediv_mask = BIT(14),
 };
 
 static const struct bcm2835_pll_ana_bits bcm2835_ana_pllh = {
-	.mask0 = (u32)~(A2W_PLLH_KA_MASK | A2W_PLLH_KI_LOW_MASK),
+	.mask0 = A2W_PLLH_KA_MASK | A2W_PLLH_KI_LOW_MASK,
 	.set0 = (2 << A2W_PLLH_KA_SHIFT) | (2 << A2W_PLLH_KI_LOW_SHIFT),
-	.mask1 = (u32)~(A2W_PLLH_KI_HIGH_MASK | A2W_PLLH_KP_MASK),
+	.mask1 = A2W_PLLH_KI_HIGH_MASK | A2W_PLLH_KP_MASK,
 	.set1 = (6 << A2W_PLLH_KP_SHIFT),
 	.mask3 = 0,
 	.set3 = 0,
@@ -636,9 +636,7 @@ static void bcm2835_pll_off(struct clk_hw *hw)
 	const struct bcm2835_pll_data *data = pll->data;
 
 	spin_lock(&cprman->regs_lock);
-	cprman_write(cprman, data->cm_ctrl_reg,
-		     cprman_read(cprman, data->cm_ctrl_reg) |
-		     CM_PLL_ANARST);
+	cprman_write(cprman, data->cm_ctrl_reg, CM_PLL_ANARST);
 	cprman_write(cprman, data->a2w_ctrl_reg,
 		     cprman_read(cprman, data->a2w_ctrl_reg) |
 		     A2W_PLL_CTRL_PWRDN);
@@ -657,8 +655,10 @@ static int bcm2835_pll_on(struct clk_hw *hw)
 		     ~A2W_PLL_CTRL_PWRDN);
 
 	/* Take the PLL out of reset. */
+	spin_lock(&cprman->regs_lock);
 	cprman_write(cprman, data->cm_ctrl_reg,
 		     cprman_read(cprman, data->cm_ctrl_reg) & ~CM_PLL_ANARST);
+	spin_unlock(&cprman->regs_lock);
 
 	/* Wait for the PLL to lock. */
 	timeout = ktime_add_ns(ktime_get(), LOCK_TIMEOUT_NS);
@@ -671,6 +671,10 @@ static int bcm2835_pll_on(struct clk_hw *hw)
 
 		cpu_relax();
 	}
+
+	cprman_write(cprman, data->a2w_ctrl_reg,
+		     cprman_read(cprman, data->a2w_ctrl_reg) |
+		     A2W_PLL_CTRL_PRST_DISABLE);
 
 	return 0;
 }
@@ -735,9 +739,11 @@ static int bcm2835_pll_set_rate(struct clk_hw *hw,
 	}
 
 	/* Unmask the reference clock from the oscillator. */
+	spin_lock(&cprman->regs_lock);
 	cprman_write(cprman, A2W_XOSC_CTRL,
 		     cprman_read(cprman, A2W_XOSC_CTRL) |
 		     data->reference_enable_mask);
+	spin_unlock(&cprman->regs_lock);
 
 	if (do_ana_setup_first)
 		bcm2835_pll_write_ana(cprman, data->ana_reg_base, ana);
@@ -1168,33 +1174,28 @@ static unsigned long bcm2835_clock_choose_div_and_prate(struct clk_hw *hw,
 	parent = clk_hw_get_parent_by_index(hw, parent_idx);
 
 	if (!(BIT(parent_idx) & data->set_rate_parent)) {
-		unsigned long tmp_rate;
-
 		*prate = clk_hw_get_rate(parent);
 		*div = bcm2835_clock_choose_div(hw, rate, *prate, true);
 
-		tmp_rate = bcm2835_clock_rate_from_divisor(clock, *prate, *div);
-		*avgrate = tmp_rate;
+		*avgrate = bcm2835_clock_rate_from_divisor(clock, *prate, *div);
 
 		if (data->low_jitter && (*div & CM_DIV_FRAC_MASK)) {
 			unsigned long high, low;
-			u32 idiv = *div & ~CM_DIV_FRAC_MASK;
+			u32 int_div = *div & ~CM_DIV_FRAC_MASK;
 
 			high = bcm2835_clock_rate_from_divisor(clock, *prate,
-							       idiv);
-			idiv += CM_DIV_FRAC_MASK + 1;
+							       int_div);
+			int_div += CM_DIV_FRAC_MASK + 1;
 			low = bcm2835_clock_rate_from_divisor(clock, *prate,
-							      idiv);
+							      int_div);
 
-			/* Return a value which is the maximum deviation
+			/*
+			 * Return a value which is the maximum deviation
 			 * below the ideal rate, for use as a metric.
 			 */
-			if ((tmp_rate - low) < (high - tmp_rate))
-				tmp_rate = low;
-			else
-				tmp_rate -= high - tmp_rate;
+			return *avgrate - max(*avgrate - low, high - *avgrate);
 		}
-		return tmp_rate;
+		return *avgrate;
 	}
 
 	if (data->frac_bits)
@@ -1590,6 +1591,20 @@ static const char *const bcm2835_clock_per_parents[] = {
 	"pllh_aux",
 };
 
+#define REGISTER_PER_CLK(...)	REGISTER_CLK(				\
+	.num_mux_parents = ARRAY_SIZE(bcm2835_clock_per_parents),	\
+	.parents = bcm2835_clock_per_parents,				\
+	__VA_ARGS__)
+
+/*
+ * Restrict clock sources for the PCM peripheral to the oscillator and
+ * PLLD_PER because other source may have varying rates or be switched
+ * off.
+ *
+ * Prevent other sources from being selected by replacing their names in
+ * the list of potential parents with dummy entries (entry index is
+ * significant).
+ */
 static const char *const bcm2835_pcm_per_parents[] = {
 	"-",
 	"xosc",
@@ -1598,11 +1613,12 @@ static const char *const bcm2835_pcm_per_parents[] = {
 	"-",
 	"-",
 	"plld_per",
+	"-",
 };
 
-#define REGISTER_PER_CLK(...)	REGISTER_CLK(				\
-	.num_mux_parents = ARRAY_SIZE(bcm2835_clock_per_parents),	\
-	.parents = bcm2835_clock_per_parents,				\
+#define REGISTER_PCM_CLK(...)	REGISTER_CLK(				\
+	.num_mux_parents = ARRAY_SIZE(bcm2835_pcm_per_parents),		\
+	.parents = bcm2835_pcm_per_parents,				\
 	__VA_ARGS__)
 
 /* main vpu parent mux */
@@ -2082,7 +2098,7 @@ static const struct bcm2835_clk_desc clk_desc_array[] = {
 		.int_bits = 4,
 		.frac_bits = 8,
 		.tcnt_mux = 22),
-	[BCM2835_CLOCK_PCM]	= REGISTER_PER_CLK(
+	[BCM2835_CLOCK_PCM]	= REGISTER_PCM_CLK(
 		.name = "pcm",
 		.ctl_reg = CM_PCMCTL,
 		.div_reg = CM_PCMDIV,
@@ -2090,7 +2106,6 @@ static const struct bcm2835_clk_desc clk_desc_array[] = {
 		.frac_bits = 12,
 		.is_mash_clock = true,
 		.low_jitter = true,
-		.parents = bcm2835_pcm_per_parents,
 		.tcnt_mux = 23),
 	[BCM2835_CLOCK_PWM]	= REGISTER_PER_CLK(
 		.name = "pwm",

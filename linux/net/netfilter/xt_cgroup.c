@@ -52,6 +52,7 @@ static int cgroup_mt_check_v1(const struct xt_mtchk_param *par)
 		return -EINVAL;
 	}
 
+	info->priv = NULL;
 	if (info->has_path) {
 		cgrp = cgroup_get_from_path(info->path);
 		if (IS_ERR(cgrp)) {
@@ -122,6 +123,7 @@ static struct xt_match cgroup_mt_reg[] __read_mostly = {
 		.checkentry	= cgroup_mt_check_v1,
 		.match		= cgroup_mt_v1,
 		.matchsize	= sizeof(struct xt_cgroup_info_v1),
+		.usersize	= offsetof(struct xt_cgroup_info_v1, priv),
 		.destroy	= cgroup_mt_destroy_v1,
 		.me		= THIS_MODULE,
 		.hooks		= (1 << NF_INET_LOCAL_OUT) |

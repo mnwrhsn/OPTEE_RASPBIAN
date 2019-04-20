@@ -10,9 +10,6 @@
 #ifndef __LINUX_TINYDRM_H
 #define __LINUX_TINYDRM_H
 
-#include <drm/drm_crtc.h>
-#include <drm/drm_encoder.h>
-#include <drm/drm_plane.h>
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_simple_kms_helper.h>
@@ -59,9 +56,7 @@ pipe_to_tinydrm(struct drm_simple_display_pipe *pipe)
 	.gem_prime_vmap		= drm_gem_cma_prime_vmap, \
 	.gem_prime_vunmap	= drm_gem_cma_prime_vunmap, \
 	.gem_prime_mmap		= drm_gem_cma_prime_mmap, \
-	.dumb_create		= drm_gem_cma_dumb_create, \
-	.dumb_map_offset	= drm_gem_cma_dumb_map_offset, \
-	.dumb_destroy		= drm_gem_dumb_destroy
+	.dumb_create		= drm_gem_cma_dumb_create
 
 /**
  * TINYDRM_MODE - tinydrm display mode

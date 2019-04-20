@@ -189,13 +189,21 @@ static void kill_urbs_in_qh_list(dwc_otg_hcd_t * hcd, dwc_list_link_t * qh_list)
 
 		}
 		if(qh->channel) {
+			int n = qh->channel->hc_num;
 			/* Using hcchar.chen == 1 is not a reliable test.
 			 * It is possible that the channel has already halted
 			 * but not yet been through the IRQ handler.
 			 */
 			if (fiq_fsm_enable && (hcd->fiq_state->channel[qh->channel->hc_num].fsm != FIQ_PASSTHROUGH)) {
+				local_fiq_disable();
+				fiq_fsm_spin_lock(&hcd->fiq_state->lock);
 				qh->channel->halt_status = DWC_OTG_HC_XFER_URB_DEQUEUE;
 				qh->channel->halt_pending = 1;
+				if (hcd->fiq_state->channel[n].fsm == FIQ_HS_ISOC_TURBO ||
+					hcd->fiq_state->channel[n].fsm == FIQ_HS_ISOC_SLEEPING)
+					hcd->fiq_state->channel[n].fsm = FIQ_HS_ISOC_ABORTED;
+				fiq_fsm_spin_unlock(&hcd->fiq_state->lock);
+				local_fiq_enable();
 			} else {
 				dwc_otg_hc_halt(hcd->core_if, qh->channel,
 						DWC_OTG_HC_XFER_URB_DEQUEUE);
@@ -596,9 +604,15 @@ int dwc_otg_hcd_urb_dequeue(dwc_otg_hcd_t * hcd,
 			/* In FIQ FSM mode, we need to shut down carefully.
 			 * The FIQ may attempt to restart a disabled channel */
 			if (fiq_fsm_enable && (hcd->fiq_state->channel[n].fsm != FIQ_PASSTHROUGH)) {
+				local_fiq_disable();
+				fiq_fsm_spin_lock(&hcd->fiq_state->lock);
 				qh->channel->halt_status = DWC_OTG_HC_XFER_URB_DEQUEUE;
 				qh->channel->halt_pending = 1;
-				//hcd->fiq_state->channel[n].fsm = FIQ_DEQUEUE_ISSUED;
+				if (hcd->fiq_state->channel[n].fsm == FIQ_HS_ISOC_TURBO ||
+					hcd->fiq_state->channel[n].fsm == FIQ_HS_ISOC_SLEEPING)
+					hcd->fiq_state->channel[n].fsm = FIQ_HS_ISOC_ABORTED;
+				fiq_fsm_spin_unlock(&hcd->fiq_state->lock);
+				local_fiq_enable();
 			} else {
 				dwc_otg_hc_halt(hcd->core_if, qh->channel,
 						DWC_OTG_HC_XFER_URB_DEQUEUE);
@@ -2005,7 +2019,6 @@ dwc_otg_transaction_type_e dwc_otg_hcd_select_transactions(dwc_otg_hcd_t * hcd)
 	dwc_list_link_t *qh_ptr;
 	dwc_otg_qh_t *qh;
 	int num_channels;
-	dwc_irqflags_t flags;
 	dwc_otg_transaction_type_e ret_val = DWC_OTG_TRANSACTION_NONE;
 
 #ifdef DEBUG_HOST_CHANNELS

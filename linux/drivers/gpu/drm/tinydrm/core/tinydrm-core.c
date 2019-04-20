@@ -10,7 +10,6 @@
 #include <drm/drm_atomic.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_crtc_helper.h>
-#include <drm/drm_fb_helper.h>
 #include <drm/tinydrm/tinydrm.h>
 #include <linux/device.h>
 #include <linux/dma-buf.h>
@@ -211,18 +210,6 @@ int devm_tinydrm_init(struct device *parent, struct tinydrm_device *tdev,
 }
 EXPORT_SYMBOL(devm_tinydrm_init);
 
-static int tinydrm_fbdev_create(struct drm_fb_helper *helper,
-				struct drm_fb_helper_surface_size *sizes)
-{
-	struct tinydrm_device *tdev = helper->dev->dev_private;
-
-	return drm_fbdev_cma_create_with_funcs(helper, sizes, tdev->fb_funcs);
-}
-
-static const struct drm_fb_helper_funcs tinydrm_fb_helper_funcs = {
-	.fb_probe = tinydrm_fbdev_create,
-};
-
 static int tinydrm_register(struct tinydrm_device *tdev)
 {
 	struct drm_device *drm = tdev->drm;
@@ -235,9 +222,8 @@ static int tinydrm_register(struct tinydrm_device *tdev)
 		return ret;
 
 	fbdev = drm_fbdev_cma_init_with_funcs(drm, bpp ? bpp : 32,
-					      drm->mode_config.num_crtc,
 					      drm->mode_config.num_connector,
-					      &tinydrm_fb_helper_funcs);
+					      tdev->fb_funcs);
 	if (IS_ERR(fbdev))
 		DRM_ERROR("Failed to initialize fbdev: %ld\n", PTR_ERR(fbdev));
 	else
@@ -250,7 +236,7 @@ static void tinydrm_unregister(struct tinydrm_device *tdev)
 {
 	struct drm_fbdev_cma *fbdev_cma = tdev->fbdev_cma;
 
-	drm_crtc_force_disable_all(tdev->drm);
+	drm_atomic_helper_shutdown(tdev->drm);
 	/* don't restore fbdev in lastclose, keep pipeline disabled */
 	tdev->fbdev_cma = NULL;
 	drm_dev_unregister(tdev->drm);
@@ -301,7 +287,7 @@ EXPORT_SYMBOL(devm_tinydrm_register);
  */
 void tinydrm_shutdown(struct tinydrm_device *tdev)
 {
-	drm_crtc_force_disable_all(tdev->drm);
+	drm_atomic_helper_shutdown(tdev->drm);
 }
 EXPORT_SYMBOL(tinydrm_shutdown);
 
@@ -318,7 +304,22 @@ EXPORT_SYMBOL(tinydrm_shutdown);
  */
 int tinydrm_suspend(struct tinydrm_device *tdev)
 {
-	/* Removed in backport since Pi doesn't use it */
+	struct drm_atomic_state *state;
+
+	if (tdev->suspend_state) {
+		DRM_ERROR("Failed to suspend: state already set\n");
+		return -EINVAL;
+	}
+
+	drm_fbdev_cma_set_suspend_unlocked(tdev->fbdev_cma, 1);
+	state = drm_atomic_helper_suspend(tdev->drm);
+	if (IS_ERR(state)) {
+		drm_fbdev_cma_set_suspend_unlocked(tdev->fbdev_cma, 0);
+		return PTR_ERR(state);
+	}
+
+	tdev->suspend_state = state;
+
 	return 0;
 }
 EXPORT_SYMBOL(tinydrm_suspend);
@@ -335,7 +336,24 @@ EXPORT_SYMBOL(tinydrm_suspend);
  */
 int tinydrm_resume(struct tinydrm_device *tdev)
 {
-	/* Removed in backport since Pi doesn't use it */
+	struct drm_atomic_state *state = tdev->suspend_state;
+	int ret;
+
+	if (!state) {
+		DRM_ERROR("Failed to resume: state is not set\n");
+		return -EINVAL;
+	}
+
+	tdev->suspend_state = NULL;
+
+	ret = drm_atomic_helper_resume(tdev->drm, state);
+	if (ret) {
+		DRM_ERROR("Error resuming state: %d\n", ret);
+		return ret;
+	}
+
+	drm_fbdev_cma_set_suspend_unlocked(tdev->fbdev_cma, 0);
+
 	return 0;
 }
 EXPORT_SYMBOL(tinydrm_resume);

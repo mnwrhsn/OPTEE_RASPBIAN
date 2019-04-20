@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LIB_UBSAN_H
 #define _LIB_UBSAN_H
 
@@ -31,6 +32,20 @@ struct overflow_data {
 
 struct type_mismatch_data {
 	struct source_location location;
+	struct type_descriptor *type;
+	unsigned long alignment;
+	unsigned char type_check_kind;
+};
+
+struct type_mismatch_data_v1 {
+	struct source_location location;
+	struct type_descriptor *type;
+	unsigned char log_alignment;
+	unsigned char type_check_kind;
+};
+
+struct type_mismatch_data_common {
+	struct source_location *location;
 	struct type_descriptor *type;
 	unsigned long alignment;
 	unsigned char type_check_kind;

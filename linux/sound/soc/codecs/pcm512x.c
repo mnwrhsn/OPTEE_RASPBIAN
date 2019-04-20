@@ -30,9 +30,6 @@
 
 #include "pcm512x.h"
 
-#define DIV_ROUND_DOWN_ULL(ll, d) \
-	({ unsigned long long _tmp = (ll); do_div(_tmp, d); _tmp; })
-
 #define PCM512x_NUM_SUPPLIES 3
 static const char * const pcm512x_supply_names[PCM512x_NUM_SUPPLIES] = {
 	"AVDD",
@@ -56,6 +53,7 @@ struct pcm512x_priv {
 	unsigned long overclock_pll;
 	unsigned long overclock_dac;
 	unsigned long overclock_dsp;
+	int lrclk_div;
 };
 
 /*
@@ -854,8 +852,10 @@ static int pcm512x_set_dividers(struct snd_soc_dai *dai,
 	int fssp;
 	int gpio;
 
-	lrclk_div = snd_pcm_format_physical_width(params_format(params))
-		* params_channels(params);
+	if (pcm512x->lrclk_div)
+		lrclk_div = pcm512x->lrclk_div;
+	else
+		lrclk_div = snd_soc_params_to_frame_size(params);
 	if (lrclk_div == 0) {
 		dev_err(dev, "No LRCLK?\n");
 		return -EINVAL;
@@ -1323,10 +1323,32 @@ static int pcm512x_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 	return 0;
 }
 
+static int pcm512x_set_tdm_slot(struct snd_soc_dai *dai,
+	unsigned int tx_mask, unsigned int rx_mask,
+	int slots, int width)
+{
+	struct snd_soc_codec *codec = dai->codec;
+	struct pcm512x_priv *pcm512x = snd_soc_codec_get_drvdata(codec);
+
+	switch (slots) {
+	case 0:
+		pcm512x->lrclk_div = 0;
+		return 0;
+	case 2:
+		if (tx_mask != 0x03 || rx_mask != 0x03)
+			return -EINVAL;
+		pcm512x->lrclk_div = slots * width;
+		return 0;
+	default:
+		return -EINVAL;
+	}
+}
+
 static const struct snd_soc_dai_ops pcm512x_dai_ops = {
 	.startup = pcm512x_dai_startup,
 	.hw_params = pcm512x_hw_params,
 	.set_fmt = pcm512x_set_fmt,
+	.set_tdm_slot = pcm512x_set_tdm_slot,
 };
 
 static struct snd_soc_dai_driver pcm512x_dai = {
@@ -1345,7 +1367,7 @@ static struct snd_soc_dai_driver pcm512x_dai = {
 	.ops = &pcm512x_dai_ops,
 };
 
-static struct snd_soc_codec_driver pcm512x_codec_driver = {
+static const struct snd_soc_codec_driver pcm512x_codec_driver = {
 	.set_bias_level = pcm512x_set_bias_level,
 	.idle_bias_off = true,
 

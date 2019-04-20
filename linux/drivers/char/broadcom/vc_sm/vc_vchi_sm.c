@@ -73,6 +73,16 @@ struct sm_instance {
 /* ---- Private Function Prototypes -------------------------------------- */
 
 /* ---- Private Functions ------------------------------------------------ */
+static int
+bcm2835_vchi_msg_queue(VCHI_SERVICE_HANDLE_T handle,
+		       void *data,
+		       unsigned int size)
+{
+	return vchi_queue_kernel_message(handle,
+					 data,
+					 size);
+}
+
 static struct
 sm_cmd_rsp_blk *vc_vchi_cmd_create(struct sm_instance *instance,
 		enum vc_sm_msg_type id, void *msg,
@@ -145,7 +155,6 @@ static int vc_vchi_sm_videocore_io(void *arg)
 			svc_use = 1;
 
 			do {
-				unsigned int flags;
 				/*
 				 * Get new command and move it to response list
 				 */
@@ -164,11 +173,9 @@ static int vc_vchi_sm_videocore_io(void *arg)
 				mutex_unlock(&instance->lock);
 
 				/* Send the command */
-				flags = VCHI_FLAGS_BLOCK_UNTIL_QUEUED;
-				status = vchi_msg_queue(
+				status = bcm2835_vchi_msg_queue(
 						instance->vchi_handle[0],
-						cmd->msg, cmd->length,
-						flags, NULL);
+						cmd->msg, cmd->length);
 				if (status) {
 					pr_err("%s: failed to queue message (%d)",
 					     __func__, status);
