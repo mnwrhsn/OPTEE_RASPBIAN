@@ -1,0 +1,5 @@
+# OPTEE specific
+
+/out/
+/toolchains/
+/dl/
