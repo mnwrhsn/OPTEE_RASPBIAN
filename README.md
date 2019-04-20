@@ -1,14 +1,15 @@
 ### Peripheral access control using TrustZone (Normal World: Raspbian Secure World: OPTEE).
 _Check the `prepare-env.sh` for the sepecific versions_      
 
-
+<br>
 
 **Perform the steps in the host machine:**
 _(tested on Ubuntu 16.04)_
 
+
 * Download Required packages:
 
-Check OPTEE Documentations: https://optee.readthedocs.io/building/prerequisites.html#prerequisites
+
 
 ```
 sudo apt-get install android-tools-adb android-tools-fastboot autoconf \
@@ -19,6 +20,8 @@ sudo apt-get install android-tools-adb android-tools-fastboot autoconf \
         mtools netcat python-crypto python-serial python-wand unzip uuid-dev \
         xdg-utils xterm xz-utils zlib1g-dev u-boot-tools lzop ccache       
  ```
+ _Check OPTEE Documentation for details : https://optee.readthedocs.io/building/prerequisites.html#prerequisites_
+
 * Create output directories: `./init_out_directory.sh`
 
 * Install Toolchains: `make toolchains`
