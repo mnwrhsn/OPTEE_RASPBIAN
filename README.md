@@ -29,6 +29,7 @@ sudo apt-get install android-tools-adb android-tools-fastboot autoconf \
 * Make the build: `make`
 
 * Copy the binaries to SD card: `./copy_to_sdcard.sh`
+
 _Note: make sure to change your mount location in the `copy_to_sdcard.sh` file (e.g. use `lsblk` command and update accordingly_
 
 ###### Note: Skeleton of codes to set up OPTEE in Raspbian is obtained from: https://github.com/benhaz1024/raspbian-tee
